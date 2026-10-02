@@ -206,7 +206,11 @@ type Manager struct {
 	// 401 recoveries and auto-refresh workers do not race the same refresh_token.
 	refreshLocks sync.Map
 	// persistLocks serializes disk persistence per auth ID and guards against out-of-order writes.
-	persistLocks sync.Map
+	persistLocks      sync.Map
+	weeklyQuota       *WeeklyQuotaCache
+	weeklyLifecycleMu sync.Mutex
+	weeklyCancel      context.CancelFunc
+	weeklyDone        chan struct{}
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -229,7 +233,9 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		homeSessionSelections: make(map[string]map[homeSessionSelectionKey]*HomeDispatchSelection),
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
+		weeklyQuota:           newWeeklyQuotaCache(),
 	}
+	manager.bindWeeklySelector(selector)
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
 	manager.apiKeyModelRouting.Store(&apiKeyModelRoutingSnapshot{config: &internalconfig.Config{}})

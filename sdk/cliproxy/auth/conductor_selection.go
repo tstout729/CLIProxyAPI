@@ -428,6 +428,7 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.mu.Unlock()
 		return
 	}
+	m.bindWeeklySelector(selector)
 	m.selector = selector
 	m.mu.Unlock()
 
@@ -618,6 +619,9 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 // unless session affinity or an across-priorities scheduler is active, in which case the selector
 // or scheduler additionally receives lower priority tiers.
 func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, provider, routeModel string, now time.Time) (priorityAuths, selectorAuths []*Auth, err error) {
+	if weekly := weeklySelector(selector); weekly != nil {
+		auths = weekly.filter(auths, routeModel, weekly.Cache.nowFunc())
+	}
 	_, sessionAffinity := selector.(*SessionAffinitySelector)
 	schedulerAcross := m.pluginSchedulerWantsAcrossPrioritiesLocked()
 
@@ -661,6 +665,12 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 
 func selectorContextForAvailableAuths(ctx context.Context, selector Selector, routeModel string) context.Context {
 	ctx = withWeightedSelectorStateModel(ctx, selector, routeModel)
+	if weeklySelector(selector) != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return context.WithValue(ctx, prevalidatedAuthCandidatesKey{}, true)
+	}
 	if !isBuiltInSelector(selector) {
 		if _, sessionAffinity := selector.(*SessionAffinitySelector); !sessionAffinity {
 			return ctx
