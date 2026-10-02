@@ -598,6 +598,12 @@ func DefaultClaudeVersion(cfg *config.Config) string {
 	return "2.1.280"
 }
 
+// DefaultClaudeUserAgent returns the configured software baseline without
+// acquiring or mutating a credential device profile.
+func DefaultClaudeUserAgent(cfg *config.Config) string {
+	return defaultClaudeDeviceProfile(cfg).UserAgent
+}
+
 func ApplyClaudeDefaultDeviceProfileHeaders(r *http.Request, cfg *config.Config) {
 	ApplyClaudeDeviceProfileHeaders(r, defaultClaudeDeviceProfile(cfg))
 }

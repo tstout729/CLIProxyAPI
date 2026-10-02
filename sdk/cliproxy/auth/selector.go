@@ -423,11 +423,11 @@ func authWebsocketsEnabled(auth *Auth) bool {
 		}
 	}
 	if len(auth.Metadata) == 0 {
-		return false
+		return auth.Provider == "codex" && auth.AuthKind() == AuthKindOAuth
 	}
 	raw, ok := auth.Metadata["websockets"]
 	if !ok || raw == nil {
-		return false
+		return auth.Provider == "codex" && auth.AuthKind() == AuthKindOAuth
 	}
 	switch v := raw.(type) {
 	case bool:
@@ -967,16 +967,23 @@ func (s *SessionAffinitySelector) Trees() *cliproxysession.InMemorySessionTreeSt
 // applies to cold bindings, requests without a session, and genuine bound-credential
 // failover, so the fallback selector only ever receives the highest available priority tier.
 //
-// Note: The cache key includes provider, session ID, and model to handle cases where
-// a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
-// that may be supported by different auth credentials, and to avoid cross-provider conflicts.
+// The cache key includes provider, session ID, and model. Weekly-reset-first
+// uses a shared model namespace to preserve the account across model switches;
+// Manager still verifies model support and model-scoped capacity before reuse.
 func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	if weekly := weeklySelector(s.fallback); weekly != nil {
+		now := time.Now()
+		if weekly.Cache != nil {
+			now = weekly.Cache.nowFunc()
+		}
+		auths = weekly.filter(auths, model, now)
+	}
 	entry := selectorLogEntry(ctx)
 	if opts.Metadata == nil {
 		opts.Metadata = make(map[string]any)
 	}
 	opts.Metadata[cliproxyexecutor.SessionAffinityProviderMetadataKey] = provider
-	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = model
+	opts.Metadata[cliproxyexecutor.SessionAffinityModelMetadataKey] = s.affinityModelKey(model)
 
 	// Explicit harness identities are absolute authority. The LCP matcher is only
 	// consulted when no header, body, or execution-session identity is present.
@@ -1035,7 +1042,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	}
 	fallbackAuths := highestPriorityAuths(available)
 
-	modelKey := canonicalModelKey(model)
+	modelKey := s.affinityModelKey(model)
 	cacheKey := provider + "::" + primaryID + "::" + modelKey
 	isFork := false
 	if opts.Metadata != nil {
@@ -1115,7 +1122,7 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	if s == nil || s.matcher == nil {
 		return nil, false, nil
 	}
-	namespace := lcpAffinityNamespace(provider, model, opts.Metadata)
+	namespace := lcpAffinityNamespace(provider, s.affinityModelKey(model), opts.Metadata)
 	if namespace == "" {
 		return nil, false, nil
 	}
@@ -1373,7 +1380,7 @@ func (s *SessionAffinitySelector) LookupAffinity(provider, model, sessionID stri
 		authFilter = authFilters[0]
 	}
 
-	modelKey := canonicalModelKey(model)
+	modelKey := s.affinityModelKey(model)
 	if modelKey == "" {
 		modelKey = model
 	}
@@ -1452,6 +1459,15 @@ func (s *SessionAffinitySelector) LookupAffinity(provider, model, sessionID stri
 		return authID, "bound"
 	}
 	return "", "unbound"
+}
+
+// Weekly routing establishes account affinity for the whole provider/thread.
+// Manager still checks support and capacity against each requested model.
+func (s *SessionAffinitySelector) affinityModelKey(model string) string {
+	if weeklySelector(s.fallback) != nil {
+		return "*"
+	}
+	return canonicalModelKey(model)
 }
 
 // OnResult handles session affinity binding or release based on execution outcome.

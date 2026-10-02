@@ -90,6 +90,7 @@ func (s *Service) Run(ctx context.Context) error {
 		})
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(ctx, interval)
+		s.coreManager.StartWeeklyQuotaRefresh(ctx)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)
 	}
 
@@ -288,6 +289,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
+			s.coreManager.StopWeeklyQuotaRefresh()
 		}
 		if s.watcher != nil {
 			if err := s.watcher.Stop(); err != nil {

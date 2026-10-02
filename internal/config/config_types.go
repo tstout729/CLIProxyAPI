@@ -180,6 +180,9 @@ type AntigravityConnectionPoolConfig struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
+	// UpstreamWebsockets defaults to true for OAuth credentials, including HTTP/SSE clients.
+	// Explicit false disables it provider-wide; credential websockets:false remains an opt-out.
+	UpstreamWebsockets *bool `yaml:"upstream-websockets,omitempty" json:"upstream-websockets,omitempty"`
 	// DisableCodexCloaking disables forcing the official Codex identity headers on HTTP/SSE and WebSocket requests.
 	DisableCodexCloaking bool `yaml:"disable-codex-cloaking" json:"disable-codex-cloaking"`
 	// StreamBootstrapBuffering holds back the frames that arrive before generation starts, none of
@@ -351,7 +354,7 @@ type QuotaExceeded struct {
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
 	// Strategy selects the credential selection strategy.
-	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
+	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first", "weekly-reset-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
