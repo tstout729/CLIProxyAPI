@@ -43,8 +43,10 @@ Trevor wants the usual Terminal commands to use the M1 gateway and explicit `-m5
 - [x] Proxy failure remains visible; direct access requires an explicit backup command.
 - [x] Preserve arguments, exit codes, legacy Claude routes, native binaries, and both home launchers.
 - [x] Verify both shell routes, live proxy inference, focused checks, and required build.
-- [ ] Commit, push, and integrate the feature serially.
+- [x] Commit, push, and integrate the feature serially.
 
 Verification: fifteen focused checks passed, including five new checks that exercise both zsh and bash. They cover literal argument forwarding, proxy selection without recursion, direct fallback, environment isolation, and failure status. Fresh zsh and bash login shells load all four functions. All four routes completed real inference; Codex reported `cliproxy_m1` for the default and `openai` for the backup. Claude reported successful structured results containing PONG for both routes. Native sign-in checks confirmed ChatGPT and Claude Max authentication. The required Go build passed. Existing legacy Claude functions explicitly call the original client; native binaries, stored client configuration, and home helpers were preserved.
+
+Delivery: feature `07c7925b` is committed and pushed, then verified and integrated at `4c071392`. The combined tree passed all fifteen checks and the required Go build. The daily Mac uses the installed shell helper; new Terminal windows load it. No proxy restart, application release, or database migration was needed.
 
 Dependencies: the existing inference key, private tunnel, native clients, and direct sign-ins. No proxy restart or application release is needed.
