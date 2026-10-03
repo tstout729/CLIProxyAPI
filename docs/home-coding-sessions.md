@@ -1,38 +1,38 @@
 # Optional coding sessions on the home host
 
-In the daily Mac's interactive Terminal, `codex` and `claude` now use the existing `codex-m1` and `claude-m1` launchers. They execute on the daily Mac and send inference to the M1 gateway. `codex-m5` and `claude-m5` use the original direct clients. Sleeping the daily Mac pauses these local jobs. The separate `codex-home` and `claude-home` commands execute the entire coding session on the M1, inside tmux. The daily Mac is just its terminal connection.
+In the daily Mac's interactive Terminal, bare `codex` and `claude` execute on the daily M5 and use the M1 gateway. Normal flags, subcommands, and text prompts keep that route. Sleeping the daily Mac pauses these local jobs. Add a positive session number: `codex 1` or `claude 1`. The entire numbered session runs on the M1, inside tmux. The daily Mac is just its terminal connection. `codex-m5` and `claude-m5` use the original direct clients on the daily Mac.
 
 ```sh
 # On the daily Mac, open M1 session 1:
-cx
-cl
+codex 1
+claude 1
 
 # Open independent numbered sessions in separate Terminal windows:
-cx 2
-cx 3
-cl 2
+codex 2
+codex 3
+claude 2
 
 # Give the agent a task, then close the daily Mac whenever you need to.
 # No detach shortcut is required. Repeat the same command to reconnect.
 
 # On the daily Mac, start an independent session in a prepared M1 checkout:
-cx 2 /Users/trevorstout/projects/my-prepared-worktree
-cl 2 /Users/trevorstout/projects/another-prepared-worktree
+codex 2 /Users/trevorstout/projects/my-prepared-worktree
+claude 2 /Users/trevorstout/projects/another-prepared-worktree
 
 # Without a project argument, a new session gets its own scratch directory.
-cx 4
+codex 4
 
 # Optionally detach with Ctrl-B followed by D, or just close the daily Mac.
 # Reconnect to the exact same running session:
-cx 2
+codex 2
 
 # List remote sessions (either launcher shows both agents):
-cx list
+codex-home list
 ```
 
-`cx` means Codex on the home M1; `cl` means Claude on the home M1. Bare shortcuts open session 1. Repeat the same number to reconnect. Codex and Claude have separate numbers: `cx 1` and `cl 1` are independent sessions. `cx list` or `cl list` shows both agents, their session numbers/names, process state, connection count, and folders.
+Repeat the same number to reconnect. Codex and Claude have separate numbers: `codex 1` and `claude 1` are independent sessions. `codex-home list` or `claude-home list` shows both agents, their session numbers/names, process state, connection count, and folders. A session number must be the first argument, with no leading zero: `codex 2`, not `codex --detach 2`. Use `codex 2 --detach` if you want to start or reuse a session without attaching.
 
-Session 1 reuses the existing `main` session when present. It does not rename, restart, or move that live session. The older `codex-home`, `claude-home`, and descriptive session names remain available. If separate `main` and `1` sessions already exist, both are preserved and the list shows `main` separately.
+Session 1 reuses the existing `main` session when present. It does not rename, restart, or move that live session. The older `codex-home`, `claude-home`, `cx`, `cl`, and descriptive session names remain available. If separate `main` and `1` sessions already exist, both are preserved and the list shows `main` separately.
 
 If a host restart removes tmux sessions, session 1 keeps an existing legacy scratch folder when its numbered folder does not exist. Project files are preserved; saved chats still require the agent's resume menu.
 
@@ -59,6 +59,7 @@ Descriptive names retain exited terminal output for inspection. Numbered session
 | Terminal command | Inference route | Coding host |
 | --- | --- | --- |
 | `codex` / `claude` | M1 proxy | Daily M5 |
+| `codex NUMBER` / `claude NUMBER` | M1 proxy | Home M1 |
 | `codex-m5` / `claude-m5` | Original direct client | Daily M5 |
 | `codex-home` / `claude-home` | M1 proxy | Home M1 |
 | `cx [NUMBER]` / `cl [NUMBER]` | M1 proxy | Home M1 |
@@ -73,7 +74,7 @@ fi
 
 Open a new Terminal window after installation. To update an existing zsh window, run `source ~/.zshrc` once.
 
-These functions call the existing M1 scripts. The backup functions use `command` to bypass the defaults and launch the original native binaries. Proxy settings remain in child processes. Native configuration, sign-ins, and managed binary links remain in place. Proxy errors remain visible; choose the direct backup explicitly.
+These functions send a positive integer first argument to the existing home launchers. Other arguments use the existing local proxy launchers. The backup functions use `command` to launch the original native binaries. Proxy settings remain in child processes. Native configuration, sign-ins, and managed binary links remain in place. Proxy or home-session errors remain visible; choose the direct backup explicitly.
 
 Existing `claudex` and `claudek` functions must call `command claude` for their configured provider routes. Otherwise the new `claude` function would select the M1 proxy for those older routes. The daily Mac's two existing calls were updated accordingly.
 
@@ -81,7 +82,7 @@ This changes interactive Terminal commands. It does not change Codex desktop set
 
 ### Home-session helper
 
-Install `scripts/codex-home-short.sh` as `~/.local/bin/cx` and `scripts/claude-home-short.sh` as `~/.local/bin/cl` on each Mac. Set both executable. They call that Mac's existing full home launchers and default to number 1. Their executable paths avoid the daily Mac's plain `codex` and `claude` shell defaults.
+The daily shell functions call `~/.local/bin/codex-home` and `~/.local/bin/claude-home` for numbered sessions. Keep these full launchers installed. Optional older shortcuts use `scripts/codex-home-short.sh` as `~/.local/bin/cx` and `scripts/claude-home-short.sh` as `~/.local/bin/cl`. They call that Mac's full home launchers and default to number 1.
 
 `scripts/home-coding-session.py` has three modes:
 

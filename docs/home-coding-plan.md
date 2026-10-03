@@ -67,3 +67,18 @@ The existing M1 defaults have live PIDs 12109 (Claude) and 12885 (Codex), both w
 Verification: twenty-one focused checks and the required Go build passed. On the M1, `cx 1` and `cl 1` selected the original defaults with the same PIDs, folders, and zero attached clients. Both agent test slots launched native version probes and restarted successfully after exit. Their exit status was zero; versions were Codex 0.160.0 and Claude Code 2.1.288. Only the owned QA slots and their empty folders were removed. Tests also verify numeric list ordering, distinct legacy names, literal arguments, and preserving an existing first-session folder after tmux state is gone. No real project files, provider configuration, or account bindings were changed.
 
 Delivery: feature `5d01e411` is committed, pushed, and integrated at `51d104a0`. The combined tree passed the same twenty-one checks and required build. Installed helpers on both Macs match the verified source. No proxy restart, application release, or database migration was needed.
+
+## Numbered normal commands (October 2, 2026, Pacific)
+
+Trevor wants `claude 1`, `claude 2`, `codex 1`, and `codex 2` as the normal M1 session commands.
+
+- [x] A positive integer first argument routes to the existing M1 home launcher.
+- [x] Bare commands, flags, subcommands, and other prompts keep the local M5 proxy route.
+- [x] Preserve all arguments, exit status, direct backups, and older home launchers.
+- [x] Focused shell/home checks and the required Go build pass.
+- [x] Install the daily shell helper and verify both live session processes remain unchanged.
+- [ ] Commit, push, and integrate the feature serially.
+
+Dependencies: existing home launchers, Tailscale, key-based SSH, and an awake M1. The existing sessions and their folders must remain intact. No proxy restart or application release is needed.
+
+Verification: twenty-five focused checks and the required Go build passed. Nine shell checks exercise both zsh and bash, including numeric dispatch, literal arguments, normal CLI arguments, environment isolation, and failure status. Fresh login shells on the M5 routed `codex 1 --detach` and `claude 1 --detach` to their existing M1 sessions. Both retained their live process IDs, original folders, and zero attached clients. The installed daily shell helper matches the verified source with private permissions. No prompts were submitted and no live agents were restarted.

@@ -1,4 +1,4 @@
-"""Protect proxy routing, explicit direct fallback, and shell argument handling."""
+"""Protect local/remote routing, direct fallback, and shell argument handling."""
 
 import json
 import os
@@ -40,10 +40,18 @@ class DailyProxyShellTests(unittest.TestCase):
                 f'exec {agent} "$@"\n'
             )
             proxy.chmod(0o755)
+            home = self.launchers / (agent + "-home")
+            home.write_text(
+                "#!/bin/sh\n"
+                "if [ -n \"${TEST_HOME_EXIT:-}\" ]; then exit \"$TEST_HOME_EXIT\"; fi\n"
+                "TEST_PROXY=home\nexport TEST_PROXY\n"
+                f'exec {agent} "$@"\n'
+            )
+            home.chmod(0o755)
 
     def run_shell(self, shell, command, *arguments, extra=None):
         env = os.environ.copy()
-        for key in ("TEST_PROXY", "TEST_PROXY_EXIT", "TEST_NATIVE_EXIT"):
+        for key in ("TEST_PROXY", "TEST_PROXY_EXIT", "TEST_HOME_EXIT", "TEST_NATIVE_EXIT"):
             env.pop(key, None)
         env.update({"HOME": str(self.root), "PATH": str(self.native) + os.pathsep + env["PATH"]})
         env.update(extra or {})
@@ -62,6 +70,43 @@ class DailyProxyShellTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(json.loads(result.stdout), {"args": arguments, "proxy": "m1"})
 
+    def test_numbered_commands_select_home_and_preserve_all_arguments(self):
+        for shell in SHELLS:
+            for agent in ("codex", "claude"):
+                for number in ("1", "2", "10", "999999999999999999999"):
+                    with self.subTest(shell=shell, agent=agent, number=number):
+                        arguments = [number, "project with 'quotes'", "--", "$(never-run); `never-run`"]
+                        result = self.run_shell(shell, 'set -u; ' + agent + ' "$@"', *arguments)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout), {"args": arguments, "proxy": "home"})
+
+    def test_bare_commands_flags_subcommands_and_prompts_keep_local_proxy_route(self):
+        cases = [[], ["exec", "1"], ["resume", "--last"], ["--model", "1"],
+                 ["1 task to fix"], ["1.5"], ["-1"], ["0"], ["01"], ["1a"], [""]]
+        for shell in SHELLS:
+            for agent in ("codex", "claude"):
+                for arguments in cases:
+                    with self.subTest(shell=shell, agent=agent, arguments=arguments):
+                        result = self.run_shell(shell, 'set -u; ' + agent + ' "$@"', *arguments)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout), {"args": arguments, "proxy": "m1"})
+
+    def test_numbered_home_failure_preserves_status_without_local_fallback(self):
+        for shell in SHELLS:
+            for agent in ("codex", "claude"):
+                with self.subTest(shell=shell, agent=agent):
+                    result = self.run_shell(shell, agent + ' 1', extra={"TEST_HOME_EXIT": "29"})
+                    self.assertEqual(result.returncode, 29)
+                    self.assertEqual(result.stdout, "")
+
+    def test_numeric_arguments_to_direct_backup_stay_native(self):
+        for shell in SHELLS:
+            for agent in ("codex", "claude"):
+                with self.subTest(shell=shell, agent=agent):
+                    result = self.run_shell(shell, agent + '-m5 1')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), {"args": ["1"], "proxy": None})
+
     def test_direct_backups_bypass_proxy_and_preserve_arguments(self):
         for shell in SHELLS:
             for agent in ("codex", "claude"):
@@ -73,10 +118,10 @@ class DailyProxyShellTests(unittest.TestCase):
     def test_proxy_settings_do_not_leak_into_direct_backup(self):
         for shell in SHELLS:
             with self.subTest(shell=shell):
-                result = self.run_shell(shell, "claude; claude-m5")
+                result = self.run_shell(shell, "claude; claude 1; claude-m5")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = [json.loads(line) for line in result.stdout.splitlines()]
-                self.assertEqual([call["proxy"] for call in calls], ["m1", None])
+                self.assertEqual([call["proxy"] for call in calls], ["m1", "home", None])
 
     def test_proxy_failure_requires_explicit_fallback(self):
         for shell in SHELLS:
