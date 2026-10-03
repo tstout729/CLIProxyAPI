@@ -109,3 +109,7 @@ The dedicated tmux socket preserves existing sessions and configuration. Its pri
 For phone access, the same session can be reached with a private SSH connection while the phone is on Tailscale. Native app remote interfaces are separate: Claude Remote Control excludes custom gateway authentication and custom base URLs; Codex desktop supports SSH projects, but phone pairing and gateway compatibility need their own setup and verification.
 
 References: [tmux persistence](https://github.com/tmux/tmux/wiki/Getting-Started#attaching-and-detaching), [Claude Remote Control](https://code.claude.com/docs/en/remote-control), [Codex remote connections](https://learn.chatgpt.com/docs/remote-connections).
+
+### Dashboard app
+
+`macos/CLIProxyDashboard/build.sh` builds `CLI Proxy.app` into `/Applications`. It opens the management dashboard in its own window. View > This Mac (⌘1) shows the local fallback proxy; View > M1 (⌘2) shows the main gateway through the tunnel. View > Copy Management Key (⌘K) copies the key for the dashboard shown, for its sign-in screen. Use the dashboard's OAuth page to sign accounts into a proxy; provider pages open in Safari. The Quota page shows each account's usage.
