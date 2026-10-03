@@ -33,3 +33,18 @@ Verification: ten focused Python checks and the required Go build passed. Both d
 Delivery: implementation `b52e75ca` is committed and pushed on `feat/simple-home-terminal`, with verified integration `84d54740` pushed to the fork. The combined tree passed the same ten checks and required build. Both Macs use the installed helper; the default QA sessions were removed. No proxy restart, application release, or database migration was needed.
 
 Dependencies and remaining project preparation are unchanged. Default sessions start in distinct M1 scratch folders; they do not imply an automatic copy of the daily Mac's current project.
+
+## Default proxy commands (October 2, 2026, Pacific)
+
+Trevor wants the usual Terminal commands to use the M1 gateway and explicit `-m5` commands to provide direct access.
+
+- [x] `codex` and `claude` select their existing M1 launchers in new interactive shells.
+- [x] `codex-m5` and `claude-m5` use the original clients, preserving native configuration and sign-ins.
+- [x] Proxy failure remains visible; direct access requires an explicit backup command.
+- [x] Preserve arguments, exit codes, legacy Claude routes, native binaries, and both home launchers.
+- [x] Verify both shell routes, live proxy inference, focused checks, and required build.
+- [ ] Commit, push, and integrate the feature serially.
+
+Verification: fifteen focused checks passed, including five new checks that exercise both zsh and bash. They cover literal argument forwarding, proxy selection without recursion, direct fallback, environment isolation, and failure status. Fresh zsh and bash login shells load all four functions. All four routes completed real inference; Codex reported `cliproxy_m1` for the default and `openai` for the backup. Claude reported successful structured results containing PONG for both routes. Native sign-in checks confirmed ChatGPT and Claude Max authentication. The required Go build passed. Existing legacy Claude functions explicitly call the original client; native binaries, stored client configuration, and home helpers were preserved.
+
+Dependencies: the existing inference key, private tunnel, native clients, and direct sign-ins. No proxy restart or application release is needed.
