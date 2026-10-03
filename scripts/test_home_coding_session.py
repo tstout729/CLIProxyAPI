@@ -16,6 +16,77 @@ spec.loader.exec_module(home)
 
 
 class HomeCodingTests(unittest.TestCase):
+    def test_first_number_keeps_legacy_workspace_when_tmux_session_is_gone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "projects/home-coding/home-codex-main"
+            legacy.mkdir(parents=True)
+            marker = legacy / "existing-work.txt"
+            marker.write_text("existing work")
+            options = type("Options", (), {"name": "1", "project": None, "detach": True})()
+            responses = [subprocess.CompletedProcess([], code, value, "") for code, value in [(1, ""), (1, ""), (0, ""), (0, str(legacy) + "\n")]]
+            with patch.object(home.Path, "home", return_value=root), patch.object(home, "tmux_command", return_value=(["tmux"], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+                home.host_session("codex", options, [])
+            self.assertIn(str(legacy), run.call_args_list[2].args[0])
+            self.assertEqual(marker.read_text(), "existing work")
+            self.assertFalse((root / "projects/home-coding/home-codex-1").exists())
+
+    def test_first_number_reuses_live_legacy_default(self):
+        options = type("Options", (), {"name": "1", "project": None, "detach": True})()
+        responses = [subprocess.CompletedProcess([], code, value, "") for code, value in [(1, ""), (0, ""), (0, "/tmp/project\n"), (0, "0\n")]]
+        with patch.object(home, "tmux_command", return_value=(["tmux"], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+            home.host_session("codex", options, [])
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn("=home-codex-main:", commands[-1])
+        self.assertTrue(all(not {"new-session", "respawn-pane", "rename-session"}.intersection(command) for command in commands))
+
+    def test_first_number_preserves_distinct_existing_number_and_default(self):
+        options = type("Options", (), {"name": "1", "project": None, "detach": True})()
+        responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/numbered-project\n", "0\n"]]
+        with patch.object(home, "tmux_command", return_value=(["tmux"], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+            home.host_session("claude", options, [])
+        self.assertIn("=home-claude-1:", run.call_args.args[0])
+        self.assertTrue(all("home-claude-main" not in " ".join(call.args[0]) for call in run.call_args_list))
+
+    def test_numbered_session_restarts_exited_agent_without_killing_live_pane(self):
+        options = type("Options", (), {"name": "2", "project": None, "detach": True})()
+        responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/project\n", "1\n", ""]]
+        with patch.object(home, "tmux_command", return_value=(["tmux"], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+            home.host_session("codex", options, [])
+        self.assertIn("respawn-pane", run.call_args.args[0])
+        self.assertNotIn("-k", run.call_args.args[0])
+
+    def test_numbered_list_orders_numbers_and_preserves_legacy_names(self):
+        output = "\n".join([
+            "home-codex-10\t0\t0\t/tmp/ten",
+            "home-codex-main\t0\t0\t/tmp/main",
+            "home-codex-2\t1\t0\t/tmp/two",
+            "home-claude-1\t0\t1\t/tmp/claude-one",
+            "home-claude-main\t0\t0\t/tmp/claude-main",
+        ])
+        rows = home.format_sessions(output).splitlines()
+        codex = [line.split() for line in rows if line.startswith("Codex")]
+        self.assertEqual([row[1] for row in codex], ["1", "2", "10"])
+        self.assertEqual(codex[1][2], "exited")
+        claude = [line.split() for line in rows if line.startswith("Claude")]
+        self.assertEqual([row[1] for row in claude], ["1", "main"])
+
+    def test_short_commands_default_to_first_number_and_preserve_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launchers = root / ".local/bin"
+            launchers.mkdir(parents=True)
+            for agent in ["codex", "claude"]:
+                launcher = launchers / (agent + "-home")
+                launcher.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+                launcher.chmod(0o755)
+                script = Path(__file__).with_name(agent + "-home-short.sh")
+                for arguments in [[], ["2", "/tmp/space and 'quote'", "--", "$(not-a-command)"]]:
+                    with self.subTest(agent=agent, arguments=arguments):
+                        result = subprocess.run(["/bin/sh", str(script), *arguments], env={**os.environ, "HOME": directory}, capture_output=True, text=True, timeout=10)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.splitlines(), arguments or ["1"])
+
     def test_bare_shortcuts_open_default_remote_session(self):
         for agent in ["codex", "claude"]:
             with self.subTest(agent=agent), patch.object(home.sys, "argv", ["home-coding-session", "client", agent]), patch.object(home, "client_session") as launch:
