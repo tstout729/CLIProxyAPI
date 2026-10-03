@@ -58,7 +58,7 @@ Descriptive names retain exited terminal output for inspection. Numbered session
 
 | Terminal command | Inference route | Coding host |
 | --- | --- | --- |
-| `codex` / `claude` | M1 proxy | Daily M5 |
+| `codex` / `claude` | M1 proxy, else local proxy | Daily M5 |
 | `codex NUMBER` / `claude NUMBER` | M1 proxy | Home M1 |
 | `codex-m5` / `claude-m5` | Original direct client | Daily M5 |
 | `codex-home` / `claude-home` | M1 proxy | Home M1 |
@@ -73,6 +73,16 @@ fi
 ```
 
 Open a new Terminal window after installation. To update an existing zsh window, run `source ~/.zshrc` once.
+
+### Local fallback proxy
+
+Install `scripts/proxy-agent.sh` as both `~/.local/bin/claude-m1` and `~/.local/bin/codex-m1`. Each launch checks that the M1 tunnel (`127.0.0.1:18318`) serves at least one model. If it does not, the launcher uses the identical proxy on the daily Mac (`127.0.0.1:8318`, service `io.tstout.cliproxyapi-custom`) and prints a one-line notice. If neither has models, it stops and names the direct `-m5` backup. Set `CLIPROXY_ROUTE=m1` or `CLIPROXY_ROUTE=local` to force a route.
+
+The local proxy needs its own provider sign-ins. Install `scripts/cliproxy-local-login.sh` as `~/.local/bin/cliproxy-local-login` and run it once: it reads the M1's account list and opens each provider login in turn. `cliproxy-local-login status` compares the two account lists. Sign-ins are made separately rather than copying the M1's OAuth files, because providers rotate refresh tokens and two machines sharing one file would sign each other out.
+
+### Terminal apps that wrap `claude`
+
+cmux installs its own `claude` shell function on the first prompt, after `~/.zshrc` has run, which bypassed the proxy. The shell helper restores its function before every prompt and command. The launcher still runs `claude` through cmux's PATH shim, so cmux's hooks and notifications keep working.
 
 These functions send a positive integer first argument to the existing home launchers. Other arguments use the existing local proxy launchers. The backup functions use `command` to launch the original native binaries. Proxy settings remain in child processes. Native configuration, sign-ins, and managed binary links remain in place. Proxy or home-session errors remain visible; choose the direct backup explicitly.
 

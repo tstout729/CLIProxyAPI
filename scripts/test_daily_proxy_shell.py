@@ -133,6 +133,22 @@ class DailyProxyShellTests(unittest.TestCase):
                 self.assertEqual(fallback.returncode, 0, fallback.stderr)
                 self.assertIsNone(json.loads(fallback.stdout)["proxy"])
 
+    def test_reclaims_claude_after_terminal_app_replaces_it(self):
+        # cmux redefines `claude` after startup files; the next prompt hook restores the proxy route.
+        override = 'claude() { command claude "$@"; }; '
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                result = self.run_shell(shell, override + "_cliproxy_reclaim; claude", "x")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["proxy"], "m1")
+
+    def test_reclaim_keeps_existing_proxy_function(self):
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                result = self.run_shell(shell, "_cliproxy_reclaim; _cliproxy_reclaim; claude 1")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["proxy"], "home")
+
     def test_native_exit_status_is_preserved(self):
         for shell in SHELLS:
             with self.subTest(shell=shell):
