@@ -84,6 +84,8 @@ The local proxy needs its own provider sign-ins. Install `scripts/cliproxy-local
 
 cmux installs its own `claude` shell function on the first prompt, after `~/.zshrc` has run, which bypassed the proxy. The shell helper restores its function before every prompt and command. The launcher still runs `claude` through cmux's PATH shim, so cmux's hooks and notifications keep working.
 
+cmux also starts and auto-resumes Claude sessions itself, without a shell, using the binary it recorded at launch. Install `scripts/proxy-agent.sh` as `~/.local/bin/claude-proxy` and set `automation.claudeBinaryPath` in `~/.config/cmux/cmux.json` to that path, then run `cmux reload-config`. Under that name the launcher runs the real binary directly, so it cannot loop back through cmux's wrapper. `claude-m5` sets `CLIPROXY_ROUTE=direct`, which the launcher honors, so the direct backup still bypasses the proxy inside cmux.
+
 These functions send a positive integer first argument to the existing home launchers. Other arguments use the existing local proxy launchers. The backup functions use `command` to launch the original native binaries. Proxy settings remain in child processes. Native configuration, sign-ins, and managed binary links remain in place. Proxy or home-session errors remain visible; choose the direct backup explicitly.
 
 Existing `claudex` and `claudek` functions must call `command claude` for their configured provider routes. Otherwise the new `claude` function would select the M1 proxy for those older routes. The daily Mac's two existing calls were updated accordingly.

@@ -49,6 +49,8 @@ codex-m5() {
   command codex "$@"
 }
 
+# Inside cmux, `command claude` reaches cmux's wrapper and then claude-proxy,
+# which honors the direct route.
 claude-m5() {
-  command claude "$@"
+  CLIPROXY_ROUTE=direct command claude "$@"
 }
