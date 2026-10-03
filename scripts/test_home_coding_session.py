@@ -16,6 +16,31 @@ spec.loader.exec_module(home)
 
 
 class HomeCodingTests(unittest.TestCase):
+    def test_bare_shortcuts_open_default_remote_session(self):
+        for agent in ["codex", "claude"]:
+            with self.subTest(agent=agent), patch.object(home.sys, "argv", ["home-coding-session", "client", agent]), patch.object(home, "client_session") as launch:
+                home.main()
+            selected_agent, options, arguments = launch.call_args.args
+            self.assertEqual((selected_agent, options.name, options.project), (agent, "main", None))
+            self.assertEqual(arguments, [])
+
+    def test_default_session_restarts_exited_agent(self):
+        options = type("Options", (), {"name": "main", "project": None, "detach": True})()
+        responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/project\n", "1\n", ""]]
+        with patch.object(home, "tmux_command", return_value=(["tmux", "-L", home.SOCKET], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+            home.host_session("codex", options, [])
+        last = run.call_args.args[0]
+        self.assertIn("respawn-pane", last)
+        self.assertNotIn("-k", last)
+        self.assertIn("/tmp/project", last)
+
+    def test_default_session_never_restarts_live_agent(self):
+        options = type("Options", (), {"name": "main", "project": None, "detach": True})()
+        responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/project\n", "0\n"]]
+        with patch.object(home, "tmux_command", return_value=(["tmux", "-L", home.SOCKET], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+            home.host_session("claude", options, [])
+        self.assertTrue(all("respawn-pane" not in call.args[0] for call in run.call_args_list))
+
     def test_detached_launcher_accepts_normal_project_arguments(self):
         argv = ["home-coding-session", "host", "codex", "--detach", "task", "/tmp/project", "--", "exec", "a quoted prompt"]
         with patch.object(home.sys, "argv", argv), patch.object(home, "host_session") as launch:
@@ -34,6 +59,13 @@ class HomeCodingTests(unittest.TestCase):
         self.assertEqual(remote[-1], prompt)
         self.assertIn(options.project, remote)
         self.assertNotIn("-t", command)
+
+    def test_ssh_can_use_installed_python_without_developer_tools(self):
+        options = type("Options", (), {"name": "main", "project": None, "detach": True})()
+        with patch.dict(os.environ, {"HOME_CODING_SSH_HOST": "user@home", "HOME_CODING_REMOTE_PYTHON": "/opt/homebrew/bin/python3"}, clear=True), patch.object(home.os, "execvp") as execute, contextlib.redirect_stdout(io.StringIO()):
+            home.client_session("codex", options, [])
+        remote = shlex.split(execute.call_args.args[1][-1])
+        self.assertEqual(remote[:2], ["/opt/homebrew/bin/python3", ".local/bin/home-coding-session"])
 
     def test_gateway_key_only_enters_child_environment(self):
         with tempfile.TemporaryDirectory() as directory:

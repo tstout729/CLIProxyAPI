@@ -3,6 +3,13 @@
 The existing `codex-m1` and `claude-m1` commands execute on the daily Mac and send inference to the M1 gateway. Sleeping the daily Mac pauses those jobs. The separate `codex-home` and `claude-home` commands execute the entire coding session on the M1, inside tmux. The daily Mac is just its terminal connection.
 
 ```sh
+# On the daily Mac, open your default M1 terminal session:
+codex-home
+claude-home
+
+# Give the agent a task, then close the daily Mac whenever you need to.
+# No detach shortcut is required. Repeat the same command to reconnect.
+
 # On the daily Mac, start an independent session in a prepared M1 checkout:
 codex-home long-task /Users/trevorstout/projects/my-prepared-worktree
 claude-home another-task /Users/trevorstout/projects/another-prepared-worktree
@@ -10,7 +17,7 @@ claude-home another-task /Users/trevorstout/projects/another-prepared-worktree
 # Without a project argument, a new session gets its own scratch directory.
 codex-home planning
 
-# Detach with Ctrl-B followed by D, or close the daily Mac.
+# Optionally detach with Ctrl-B followed by D, or just close the daily Mac.
 # Reconnect to the exact same running session:
 codex-home long-task
 
@@ -18,11 +25,13 @@ codex-home long-task
 codex-home list
 ```
 
+Bare shortcuts open the `main` session for that agent. A new default session starts in its own M1 scratch folder, not the daily Mac's current project. A live session is reused without restarting or resending your prompt. If you explicitly quit the agent, running the bare shortcut again starts a fresh agent; its normal resume menu can restore a saved conversation. Named sessions other than `main` retain their exited output for inspection.
+
 The M1 must remain plugged in, awake, online, and logged in. Leave its lid open; the screen may lock or turn off. A small per-agent caffeinate process prevents idle sleep while an agent runs, but does not prevent lid-close sleep or survive a reboot. tmux preserves a session across SSH disconnects, not host shutdowns. A task can still pause for a question, permission, quota, or tool failure. Detaching does not create a goal or make an interactive agent work indefinitely.
 
 The M1 runs builds, tests, and commands against its own files. A repository on the daily Mac is not automatically available there. Before real project work, fetch the desired branch on the M1 and create an isolated worktree; migrated checkouts may be stale. Use Git to transfer reviewed commits between machines. Do not copy credential folders, customer records, or an entire dirty workspace, and do not let two sessions edit the same worktree. The launchers do not pull, reset, synchronize, or rewrite project files.
 
-Session names accept letters, numbers, hyphens, and underscores. Repeat the same agent and name to reattach. A conflicting project directory is rejected. Arguments after `--` launch a new agent; when reconnecting, they are not submitted again:
+Session names accept letters, numbers, hyphens, and underscores. Repeat the same agent and name to reattach, or repeat the bare shortcut for your default session. A conflicting project directory is rejected. Arguments after `--` launch a new agent; when reconnecting to a live session, they are not submitted again:
 
 ```sh
 codex-home investigation my-prepared-worktree -- -m gpt-6.1-sol
@@ -30,7 +39,7 @@ claude-home investigation my-prepared-worktree -- --model claude-haiku-4-5-20251
 codex-home --detach background my-prepared-worktree -- "Investigate the test failures and implement a fix."
 ```
 
-Agent exit leaves its terminal output visible. Reconnect to inspect it. To resume a saved conversation after an exit or host reboot, start a fresh tmux name in the same project with `-- resume --last` for Codex, or `-- --continue` for Claude. This resumes the agent's saved transcript; it cannot restore a terminated process. An existing live local-Mac chat is not transferred by these commands.
+Named sessions retain exited terminal output for inspection. The default `main` session restarts an exited agent when you reconnect. To resume a saved conversation after an exit or host reboot, start a fresh tmux name in the same project with `-- resume --last` for Codex, or `-- --continue` for Claude. This resumes the agent's saved transcript; it cannot restore a terminated process. An existing live local-Mac chat is not transferred by these commands.
 
 ## Installation and authentication
 
@@ -40,7 +49,7 @@ Agent exit leaves its terminal output visible. Reconnect to inspect it. To resum
 - `host codex|claude`: manage the host's dedicated `cliproxy-home` tmux socket.
 - `run codex|claude -- ARGS`: execute the agent against the host gateway.
 
-Install the script as `~/.local/bin/home-coding-session` on both machines. The daily-Mac wrapper selects `client` mode, sets `HOME_CODING_SSH_HOST`, and optionally `HOME_CODING_SSH_KEY`. Set `HOME_CODING_REMOTE_SCRIPT` for another installed host path. `CPA_CODEX_MODEL` can select the default Codex model; normal agent model flags override it.
+Install the script as `~/.local/bin/home-coding-session` on both machines. The daily-Mac wrapper selects `client` mode, sets `HOME_CODING_SSH_HOST`, and optionally `HOME_CODING_SSH_KEY`. Set `HOME_CODING_REMOTE_SCRIPT` for another installed host path. Set `HOME_CODING_REMOTE_PYTHON` to the installed interpreter when the non-interactive SSH path cannot find it. These Macs use `/opt/homebrew/bin/python3`; macOS's `/usr/bin/python3` can depend on Xcode selection/license state. `CPA_CODEX_MODEL` can select the default Codex model; normal agent model flags override it.
 
 The host needs Python 3, tmux, Codex, and Claude Code. It reads the inference key at runtime from `~/.config/cliproxyapi-custom/client-api-key`, requiring private permissions, and connects to `http://127.0.0.1:8318`. `CPA_PROXY_KEY_FILE` and `CPA_PROXY_URL` customize those host-side paths. The proxy key stays in the agent environment, never the SSH command or tmux arguments. No provider OAuth files or OpenAI API key are copied.
 
