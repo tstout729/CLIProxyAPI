@@ -77,8 +77,10 @@ Trevor wants `claude 1`, `claude 2`, `codex 1`, and `codex 2` as the normal M1 s
 - [x] Preserve all arguments, exit status, direct backups, and older home launchers.
 - [x] Focused shell/home checks and the required Go build pass.
 - [x] Install the daily shell helper and verify both live session processes remain unchanged.
-- [ ] Commit, push, and integrate the feature serially.
+- [x] Commit, push, and integrate the feature serially.
 
 Dependencies: existing home launchers, Tailscale, key-based SSH, and an awake M1. The existing sessions and their folders must remain intact. No proxy restart or application release is needed.
 
 Verification: twenty-five focused checks and the required Go build passed. Nine shell checks exercise both zsh and bash, including numeric dispatch, literal arguments, normal CLI arguments, environment isolation, and failure status. Fresh login shells on the M5 routed `codex 1 --detach` and `claude 1 --detach` to their existing M1 sessions. Both retained their live process IDs, original folders, and zero attached clients. The installed daily shell helper matches the verified source with private permissions. No prompts were submitted and no live agents were restarted.
+
+Delivery: feature `68d1a864` is committed, pushed, and integrated at `e3ec54d5`. The combined tree passed all twenty-five checks and the required Go build. New Terminal windows load the installed helper; existing zsh windows can run `source ~/.zshrc` once. No proxy restart, application release, or database migration was needed.
