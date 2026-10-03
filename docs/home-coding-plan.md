@@ -60,8 +60,10 @@ Use `cx` for Codex and `cl` for Claude, with positive session numbers starting a
 - [x] Session lists show each agent, number/name, process state, connection count, and folder.
 - [x] Preserve distinct legacy/default sessions and restart an exited numbered agent without killing a live pane.
 - [x] Verify focused checks, required build, installed helpers, and real M1 reconnection.
-- [ ] Commit, push, and integrate the feature serially.
+- [x] Commit, push, and integrate the feature serially.
 
 The existing M1 defaults have live PIDs 12109 (Claude) and 12885 (Codex), both with zero attached terminal clients. Preserve them throughout verification. Project preparation and host power/network dependencies remain unchanged.
 
 Verification: twenty-one focused checks and the required Go build passed. On the M1, `cx 1` and `cl 1` selected the original defaults with the same PIDs, folders, and zero attached clients. Both agent test slots launched native version probes and restarted successfully after exit. Their exit status was zero; versions were Codex 0.160.0 and Claude Code 2.1.288. Only the owned QA slots and their empty folders were removed. Tests also verify numeric list ordering, distinct legacy names, literal arguments, and preserving an existing first-session folder after tmux state is gone. No real project files, provider configuration, or account bindings were changed.
+
+Delivery: feature `5d01e411` is committed, pushed, and integrated at `51d104a0`. The combined tree passed the same twenty-one checks and required build. Installed helpers on both Macs match the verified source. No proxy restart, application release, or database migration was needed.
