@@ -4,7 +4,13 @@
 # Install this file as ~/.local/bin/claude-m1 and ~/.local/bin/codex-m1; the
 # installed name selects the agent. Each launch probes the M1 tunnel first and
 # falls back to the identical proxy on this Mac when the M1 has no usable
-# models. CLIPROXY_ROUTE=m1 or CLIPROXY_ROUTE=local forces one route.
+# models. CLIPROXY_ROUTE=m1 or CLIPROXY_ROUTE=local forces one route, and
+# CLIPROXY_ROUTE=direct skips the proxy.
+#
+# Also install it as ~/.local/bin/claude-proxy and set cmux's Claude Binary
+# Path to that file. cmux then starts and auto-resumes sessions through the
+# proxy; under that name the script runs the real binary instead of looking
+# `claude` up in PATH, which would loop back into cmux's wrapper.
 set -eu
 
 config_dir="${CLIPROXY_CONFIG_DIR:-$HOME/.config/cliproxyapi-custom}"
@@ -12,7 +18,9 @@ m1_url="${CLIPROXY_M1_URL:-http://127.0.0.1:18318}"
 local_url="${CLIPROXY_LOCAL_URL:-http://127.0.0.1:8318}"
 probe_timeout="${CLIPROXY_PROBE_TIMEOUT:-3}"
 
+claude_exec=claude
 case "$(basename "$0")" in
+  claude-proxy) agent=claude; claude_exec="${CLIPROXY_CLAUDE_BIN:-$HOME/.local/bin/claude}" ;;
   claude*) agent=claude ;;
   codex*) agent=codex ;;
   *) agent="${CLIPROXY_AGENT:-}" ;;
@@ -32,6 +40,17 @@ proxy_ready() {
 
 use_m1() { base_url="$m1_url"; key_file="$config_dir/m1-client-api-key"; }
 use_local() { base_url="$local_url"; key_file="$config_dir/client-api-key"; }
+
+if [ "${CLIPROXY_ROUTE:-}" = direct ]; then
+  unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN CLIPROXY_SELECTED
+  [ "$agent" = claude ] && exec "$claude_exec" "$@"
+  exec codex "$@"
+fi
+
+# An outer launcher already chose the route; cmux's wrapper re-enters here.
+if [ -n "${CLIPROXY_SELECTED:-}" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ] && [ "$agent" = claude ]; then
+  exec "$claude_exec" "$@"
+fi
 
 case "${CLIPROXY_ROUTE:-auto}" in
   m1) use_m1 ;;
@@ -59,9 +78,10 @@ fi
 if [ "$agent" = claude ]; then
   ANTHROPIC_BASE_URL="$base_url"
   ANTHROPIC_AUTH_TOKEN="$(cat "$key_file")"
-  export ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+  CLIPROXY_SELECTED=1
+  export ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN CLIPROXY_SELECTED
   unset ANTHROPIC_API_KEY
-  exec claude "$@"
+  exec "$claude_exec" "$@"
 fi
 
 CLIPROXY_API_KEY="$(cat "$key_file")"
