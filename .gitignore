@@ -32,6 +32,8 @@ auths/*
 docs/*
 !docs/management-api-v8.md
 !docs/weekly-reset-routing.md
+!docs/home-coding-sessions.md
+!docs/home-coding-plan.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md
