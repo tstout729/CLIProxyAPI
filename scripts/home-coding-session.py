@@ -100,6 +100,12 @@ def host_session(agent, options, arguments):
     def tmux(*args, check=False):
         return subprocess.run(command + list(args), env=env, capture_output=True, text=True, check=check)
 
+    def launch_command():
+        launch = [sys.executable, str(Path(__file__).resolve()), "run", agent, "--", *arguments]
+        if env.get("CPA_CODEX_MODEL"):
+            launch = ["/usr/bin/env", "CPA_CODEX_MODEL=" + env["CPA_CODEX_MODEL"], *launch]
+        return launch
+
     if options.name == "list":
         result = tmux("list-sessions", "-F", "#{session_name} | #{pane_start_path} | #{session_attached} connected")
         print(result.stdout.strip() if result.returncode == 0 else "No home coding sessions yet.")
@@ -123,23 +129,23 @@ def host_session(agent, options, arguments):
         if directory and str(directory) != saved:
             fail(f"This session already uses {saved}; choose another session name for {directory}.")
         directory = Path(saved)
-        if arguments:
+        if options.name == "main" and tmux("display-message", "-p", "-t", pane_target, "#{pane_dead}", check=True).stdout.strip() == "1":
+            tmux("respawn-pane", "-t", pane_target, "-c", str(directory), "--", *launch_command(), check=True)
+            print("The previous agent exited; starting it again. Saved conversations remain available in the agent's resume menu.")
+        elif arguments:
             print("Reconnecting to the existing session; launch arguments are not submitted again.")
     else:
         if directory is None:
             directory = Path.home() / "projects/home-coding" / session
             directory.mkdir(parents=True, exist_ok=True)
-        launch = [sys.executable, str(Path(__file__).resolve()), "run", agent, "--", *arguments]
-        if env.get("CPA_CODEX_MODEL"):
-            launch = ["/usr/bin/env", "CPA_CODEX_MODEL=" + env["CPA_CODEX_MODEL"], *launch]
-        created = tmux("new-session", "-d", "-s", session, "-n", agent, "-c", str(directory), "--", *launch)
+        created = tmux("new-session", "-d", "-s", session, "-n", agent, "-c", str(directory), "--", *launch_command())
         if created.returncode != 0 and tmux("has-session", "-t", target).returncode != 0:
             fail(created.stderr.strip())
         # A simultaneous creator must not let us attach to a different project.
         saved = tmux("display-message", "-p", "-t", pane_target, "#{pane_start_path}", check=True).stdout.strip()
         if str(directory) != saved:
             fail(f"A concurrent session uses {saved}; choose another session name.")
-    print(f"Running on the HOME HOST: {session}\nFiles: {directory}\nDetach: Ctrl-B, then D. Reconnect with the same command.", flush=True)
+    print(f"Running on the HOME HOST: {session}\nFiles: {directory}\nYou can close this laptop; work stays on the home host. Run the same command to reconnect.\nOptional detach: Ctrl-B, then D.", flush=True)
     if not options.detach:
         os.execvpe(command[0], command + ["attach-session", "-t", target], env)
 
@@ -156,6 +162,9 @@ def client_session(agent, options, arguments):
     if options.project:
         remote.append(options.project)
     remote.extend(["--", *arguments])
+    remote_python = os.environ.get("HOME_CODING_REMOTE_PYTHON")
+    if remote_python:
+        remote.insert(0, remote_python)
     if os.environ.get("CPA_CODEX_MODEL"):
         remote = ["env", "CPA_CODEX_MODEL=" + os.environ["CPA_CODEX_MODEL"], *remote]
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3"]
@@ -175,7 +184,7 @@ def main():
     parser.add_argument("mode", choices=["client", "host", "run"])
     parser.add_argument("agent", choices=["codex", "claude"])
     parser.add_argument("--detach", action="store_true", help="Start without attaching")
-    parser.add_argument("name", nargs="?", help="Session name, or 'list'")
+    parser.add_argument("name", nargs="?", default="main", help="Session name (default: main), or 'list'")
     parser.add_argument("project", nargs="?", help="Existing host project name or absolute path")
     raw = sys.argv[1:]
     boundary = raw.index("--") if "--" in raw else len(raw)
