@@ -1,6 +1,6 @@
 # Optional coding sessions on the home host
 
-The existing `codex-m1` and `claude-m1` commands execute on the daily Mac and send inference to the M1 gateway. Sleeping the daily Mac pauses those jobs. The separate `codex-home` and `claude-home` commands execute the entire coding session on the M1, inside tmux. The daily Mac is just its terminal connection.
+In the daily Mac's interactive Terminal, `codex` and `claude` now use the existing `codex-m1` and `claude-m1` launchers. They execute on the daily Mac and send inference to the M1 gateway. `codex-m5` and `claude-m5` use the original direct clients. Sleeping the daily Mac pauses these local jobs. The separate `codex-home` and `claude-home` commands execute the entire coding session on the M1, inside tmux. The daily Mac is just its terminal connection.
 
 ```sh
 # On the daily Mac, open your default M1 terminal session:
@@ -42,6 +42,32 @@ codex-home --detach background my-prepared-worktree -- "Investigate the test fai
 Named sessions retain exited terminal output for inspection. The default `main` session restarts an exited agent when you reconnect. To resume a saved conversation after an exit or host reboot, start a fresh tmux name in the same project with `-- resume --last` for Codex, or `-- --continue` for Claude. This resumes the agent's saved transcript; it cannot restore a terminated process. An existing live local-Mac chat is not transferred by these commands.
 
 ## Installation and authentication
+
+### Daily Mac command defaults
+
+| Terminal command | Inference route | Coding host |
+| --- | --- | --- |
+| `codex` / `claude` | M1 proxy | Daily M5 |
+| `codex-m5` / `claude-m5` | Original direct client | Daily M5 |
+| `codex-home` / `claude-home` | M1 proxy | Home M1 |
+
+Install `scripts/daily-proxy-shell.sh` at `~/.config/cliproxyapi-custom/daily-proxy-shell.sh` on the daily Mac. Source it at the end of `~/.zshrc`, `~/.bashrc`, and `~/.bash_profile`:
+
+```sh
+if [ -r "$HOME/.config/cliproxyapi-custom/daily-proxy-shell.sh" ]; then
+  . "$HOME/.config/cliproxyapi-custom/daily-proxy-shell.sh"
+fi
+```
+
+Open a new Terminal window after installation. To update an existing zsh window, run `source ~/.zshrc` once.
+
+These functions call the existing M1 scripts. The backup functions use `command` to bypass the defaults and launch the original native binaries. Proxy settings remain in child processes. Native configuration, sign-ins, and managed binary links remain in place. Proxy errors remain visible; choose the direct backup explicitly.
+
+Existing `claudex` and `claudek` functions must call `command claude` for their configured provider routes. Otherwise the new `claude` function would select the M1 proxy for those older routes. The daily Mac's two existing calls were updated accordingly.
+
+This changes interactive Terminal commands. It does not change Codex desktop settings or the M1's command defaults. [Official OpenAI documentation](https://learn.chatgpt.com/docs/config-file/config-advanced) describes how per-invocation provider settings remain separate from stored client configuration.
+
+### Home-session helper
 
 `scripts/home-coding-session.py` has three modes:
 
