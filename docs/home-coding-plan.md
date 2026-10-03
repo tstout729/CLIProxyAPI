@@ -26,8 +26,10 @@ Trevor prefers the Terminal interface. Keep the existing remote execution archit
 - [x] Closing the daily laptop requires no detach keystroke; the terminal explains this directly.
 - [x] Live default sessions reconnect without restarting; an exited default agent can be started again without a new session name.
 - [x] Verify default launch, restart, live reconnection, quoting, key handling, project guards, and required build.
-- [ ] Commit, push, and integrate this follow-up serially.
+- [x] Commit, push, and integrate this follow-up serially.
 
 Verification: ten focused Python checks and the required Go build passed. Both default remote sessions launched native version checks and restarted after exit. Bare `codex-home` restarted the exited default agent, then retained PID 11540 across client termination (zero attached clients) and bare-command reconnection. Personal launchers on both Macs explicitly use installed Homebrew Python; this avoids the M1's current Apple Python/Xcode license prompt without changing Xcode or accepting its license. Git from the standalone Command Line Tools also answered a version check; project builds and current checkouts still require preparation.
+
+Delivery: implementation `b52e75ca` is committed and pushed on `feat/simple-home-terminal`, with verified integration `84d54740` pushed to the fork. The combined tree passed the same ten checks and required build. Both Macs use the installed helper; the default QA sessions were removed. No proxy restart, application release, or database migration was needed.
 
 Dependencies and remaining project preparation are unchanged. Default sessions start in distinct M1 scratch folders; they do not imply an automatic copy of the daily Mac's current project.
