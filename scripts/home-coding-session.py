@@ -17,6 +17,28 @@ SOCKET = "cliproxy-home"
 PREFIX = "home-"
 
 
+def format_sessions(output):
+    records = []
+    for line in output.splitlines():
+        fields = line.split("\t", 3)
+        if len(fields) == 4:
+            match = re.fullmatch(r"home-(codex|claude)-(.+)", fields[0])
+            if match:
+                records.append((fields[0], match[1], match[2], *fields[1:]))
+    names = {row[0] for row in records}
+    rows = []
+    for name, agent, number, dead, attached, directory in records:
+        if number == "main" and f"{PREFIX}{agent}-1" not in names:
+            number = "1"
+        rows.append((agent.capitalize(), number, "exited" if dead == "1" else "running", attached, directory))
+    if not rows:
+        return "No home coding sessions yet."
+    rows.sort(key=lambda row: (row[0], (0, int(row[1])) if row[1].isascii() and row[1].isdigit() else (1, row[1])))
+    rows.insert(0, ("Agent", "Session", "Process", "Connected", "M1 folder"))
+    widths = [max(len(row[i]) for row in rows) for i in range(4)]
+    return "\n".join("  ".join(value.ljust(widths[i]) for i, value in enumerate(row[:4])) + "  " + row[4] for row in rows)
+
+
 def fail(message):
     raise SystemExit(message)
 
@@ -107,15 +129,23 @@ def host_session(agent, options, arguments):
         return launch
 
     if options.name == "list":
-        result = tmux("list-sessions", "-F", "#{session_name} | #{pane_start_path} | #{session_attached} connected")
-        print(result.stdout.strip() if result.returncode == 0 else "No home coding sessions yet.")
+        result = tmux("list-sessions", "-F", "#{session_name}\t#{pane_dead}\t#{session_attached}\t#{pane_start_path}")
+        print(format_sessions(result.stdout) if result.returncode == 0 else "No home coding sessions yet.")
         return
     if not options.name or not re.fullmatch(r"[A-Za-z0-9_-]{1,60}", options.name):
         fail("Choose a session name using letters, digits, hyphens, or underscores.")
     session = f"{PREFIX}{agent}-{options.name}"
     target = "=" + session
-    pane_target = target + ":"
     exists = tmux("has-session", "-t", target).returncode == 0
+    # Session 1 reuses an existing default without renaming or restarting it.
+    # If both old names exist, preserve each session's original identity.
+    if not exists and options.name in ("main", "1"):
+        alternate = f"{PREFIX}{agent}-{'1' if options.name == 'main' else 'main'}"
+        alternate_exists = tmux("has-session", "-t", "=" + alternate).returncode == 0
+        session = alternate if alternate_exists else f"{PREFIX}{agent}-1"
+        target = "=" + session
+        exists = alternate_exists
+    pane_target = target + ":"
     directory = None
     if options.project:
         directory = Path(options.project).expanduser()
@@ -129,7 +159,8 @@ def host_session(agent, options, arguments):
         if directory and str(directory) != saved:
             fail(f"This session already uses {saved}; choose another session name for {directory}.")
         directory = Path(saved)
-        if options.name == "main" and tmux("display-message", "-p", "-t", pane_target, "#{pane_dead}", check=True).stdout.strip() == "1":
+        restartable = options.name == "main" or re.fullmatch(r"[1-9][0-9]*", options.name)
+        if restartable and tmux("display-message", "-p", "-t", pane_target, "#{pane_dead}", check=True).stdout.strip() == "1":
             tmux("respawn-pane", "-t", pane_target, "-c", str(directory), "--", *launch_command(), check=True)
             print("The previous agent exited; starting it again. Saved conversations remain available in the agent's resume menu.")
         elif arguments:
@@ -137,6 +168,9 @@ def host_session(agent, options, arguments):
     else:
         if directory is None:
             directory = Path.home() / "projects/home-coding" / session
+            legacy = Path.home() / "projects/home-coding" / f"{PREFIX}{agent}-main"
+            if options.name in ("main", "1") and not directory.exists() and legacy.is_dir():
+                directory = legacy
             directory.mkdir(parents=True, exist_ok=True)
         created = tmux("new-session", "-d", "-s", session, "-n", agent, "-c", str(directory), "--", *launch_command())
         if created.returncode != 0 and tmux("has-session", "-t", target).returncode != 0:
@@ -184,7 +218,7 @@ def main():
     parser.add_argument("mode", choices=["client", "host", "run"])
     parser.add_argument("agent", choices=["codex", "claude"])
     parser.add_argument("--detach", action="store_true", help="Start without attaching")
-    parser.add_argument("name", nargs="?", default="main", help="Session name (default: main), or 'list'")
+    parser.add_argument("name", nargs="?", default="main", help="Session number/name (default: session 1), or 'list'")
     parser.add_argument("project", nargs="?", help="Existing host project name or absolute path")
     raw = sys.argv[1:]
     boundary = raw.index("--") if "--" in raw else len(raw)
