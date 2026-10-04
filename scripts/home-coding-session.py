@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 
 SOCKET = "cliproxy-home"
@@ -210,7 +211,47 @@ def client_session(agent, options, arguments):
             fail("Attach from an interactive Terminal, or use --detach.")
         ssh.append("-t")
     print(f"Connecting to {host}. The coding process and project files stay on that host.", flush=True)
-    os.execvp("ssh", [*ssh, host, shlex.join(remote)])
+    if options.name == "list" or options.detach:
+        os.execvp("ssh", [*ssh, host, shlex.join(remote)])
+    attach_with_reconnect(ssh, host, remote, remote[:len(remote) - len(arguments)])
+
+
+# ssh exits 255 when the connection fails or drops; tmux exits 0 on detach.
+SSH_CONNECTION_ERROR = 255
+# A connection that lasted this long reached the host, so later failures are network drops.
+CONNECTED_SECONDS = 5
+
+
+def attach_with_reconnect(ssh, host, remote, reattach):
+    """Keep the terminal open across network drops; the agent keeps running on the host."""
+    connected = False
+    command = remote
+    probe = [option for option in ssh if option != "-t"]
+    while True:
+        started = time.monotonic()
+        code = subprocess.run([*ssh, host, shlex.join(command)]).returncode
+        if code != SSH_CONNECTION_ERROR:
+            raise SystemExit(code)
+        connected = connected or time.monotonic() - started >= CONNECTED_SECONDS
+        if not connected:
+            raise SystemExit(code)
+        # Leave tmux's alternate screen, mouse, and paste modes behind the dead connection.
+        sys.stdout.write("\033[?1049l\033[?25h\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?2004l\033[0m\n")
+        # Reconnect without the launch arguments so nothing is submitted twice.
+        command = reattach
+        try:
+            print("Connection to the home host was lost. The agent is still running there.\n"
+                  "Reconnecting automatically; press Ctrl-C to stop trying.", flush=True)
+            while True:
+                time.sleep(3)
+                if subprocess.run([*probe, host, "true"],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL).returncode == 0:
+                    break
+        except KeyboardInterrupt:
+            print()
+            raise SystemExit(130)
+        print("Reconnected.", flush=True)
 
 
 def main():
