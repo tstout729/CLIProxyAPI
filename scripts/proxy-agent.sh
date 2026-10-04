@@ -2,9 +2,12 @@
 # Launch Claude Code or Codex through CLIProxyAPI, preferring the M1 gateway.
 #
 # Install this file as ~/.local/bin/claude-m1 and ~/.local/bin/codex-m1; the
-# installed name selects the agent. Each launch probes the M1 tunnel first and
-# falls back to the identical proxy on this Mac when the M1 has no usable
-# models. CLIPROXY_ROUTE=m1 or CLIPROXY_ROUTE=local forces one route, and
+# installed name selects the agent. Each launch prefers the proxy switch
+# (cmd/proxy-switch), which sends every request to the M1 while it is healthy
+# and to this Mac's identical proxy otherwise, so running sessions fail over and
+# back without a restart. Without the switch, the launch probes the M1 tunnel
+# once and falls back to the local proxy for the whole session.
+# CLIPROXY_ROUTE=switch, m1, or local forces one route, and
 # CLIPROXY_ROUTE=direct skips the proxy.
 #
 # Also install it as ~/.local/bin/claude-proxy and set cmux's Claude Binary
@@ -16,6 +19,7 @@ set -eu
 config_dir="${CLIPROXY_CONFIG_DIR:-$HOME/.config/cliproxyapi-custom}"
 m1_url="${CLIPROXY_M1_URL:-http://127.0.0.1:18318}"
 local_url="${CLIPROXY_LOCAL_URL:-http://127.0.0.1:8318}"
+switch_url="${CLIPROXY_SWITCH_URL:-http://127.0.0.1:18320}"
 probe_timeout="${CLIPROXY_PROBE_TIMEOUT:-3}"
 
 claude_exec=claude
@@ -40,6 +44,8 @@ proxy_ready() {
 
 use_m1() { base_url="$m1_url"; key_file="$config_dir/m1-client-api-key"; }
 use_local() { base_url="$local_url"; key_file="$config_dir/client-api-key"; }
+# The switch accepts the local key and substitutes each proxy's own key.
+use_switch() { base_url="$switch_url"; key_file="$config_dir/client-api-key"; }
 
 if [ "${CLIPROXY_ROUTE:-}" = direct ]; then
   unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN CLIPROXY_SELECTED
@@ -55,16 +61,20 @@ fi
 case "${CLIPROXY_ROUTE:-auto}" in
   m1) use_m1 ;;
   local) use_local ;;
+  switch) use_switch ;;
   *)
-    use_m1
+    use_switch
     if ! proxy_ready "$base_url" "$key_file"; then
-      use_local
-      if proxy_ready "$base_url" "$key_file"; then
-        printf '%s: M1 proxy unreachable; using the local proxy on this Mac.\n' "$agent" >&2
-      else
-        printf '%s: neither the M1 proxy (%s) nor the local proxy (%s) has usable models.\n' "$agent" "$m1_url" "$local_url" >&2
-        printf 'Sign in locally with cliproxy-local-login, or run %s-m5 for the direct client.\n' "$agent" >&2
-        exit 1
+      use_m1
+      if ! proxy_ready "$base_url" "$key_file"; then
+        use_local
+        if proxy_ready "$base_url" "$key_file"; then
+          printf '%s: M1 proxy unreachable; using the local proxy on this Mac.\n' "$agent" >&2
+        else
+          printf '%s: neither the M1 proxy (%s) nor the local proxy (%s) has usable models.\n' "$agent" "$m1_url" "$local_url" >&2
+          printf 'Sign in locally with cliproxy-local-login, or run %s-m5 for the direct client.\n' "$agent" >&2
+          exit 1
+        fi
       fi
     fi
     ;;
