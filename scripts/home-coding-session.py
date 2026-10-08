@@ -15,6 +15,16 @@ import time
 
 
 SOCKET = "cliproxy-home"
+# Keep agents feeling like a plain local terminal: Shift+Enter and other
+# modified keys, copy to the laptop's clipboard, no Escape delay, long scrollback.
+NATIVE_FEEL = [
+    "set -s extended-keys on",
+    "set -as terminal-features 'xterm*:extkeys'",
+    "set -s set-clipboard on",
+    "set -g allow-passthrough on",
+    "set -s escape-time 0",
+    "set -g history-limit 100000",
+]
 PREFIX = "home-"
 
 
@@ -110,6 +120,7 @@ def tmux_command():
         lines.extend([
             "set -g remain-on-exit on",
             'set -g status-right "HOME HOST · #S · %H:%M"',
+            *NATIVE_FEEL,
         ])
         with config.open("x") as output:
             config.chmod(0o600)
@@ -176,11 +187,17 @@ def host_session(agent, options, arguments):
         created = tmux("new-session", "-d", "-s", session, "-n", agent, "-c", str(directory), "--", *launch_command())
         if created.returncode != 0 and tmux("has-session", "-t", target).returncode != 0:
             fail(created.stderr.strip())
+        if created.returncode == 0 and getattr(options, "fresh", False):
+            # A one-off session closes when its agent exits instead of lingering.
+            tmux("set-option", "-t", target, "remain-on-exit", "off")
+            # Look like the agent running in a plain terminal: no tmux status line.
+            tmux("set-option", "-t", target, "status", "off")
         # A simultaneous creator must not let us attach to a different project.
         saved = tmux("display-message", "-p", "-t", pane_target, "#{pane_start_path}", check=True).stdout.strip()
         if str(directory) != saved:
             fail(f"A concurrent session uses {saved}; choose another session name.")
-    print(f"Running on the HOME HOST: {session}\nFiles: {directory}\nYou can close this laptop; work stays on the home host. Run the same command to reconnect.\nOptional detach: Ctrl-B, then D.", flush=True)
+    if not getattr(options, "fresh", False):
+        print(f"Running on the HOME HOST: {session}\nFiles: {directory}\nYou can close this laptop; work stays on the home host. Run the same command to reconnect.\nOptional detach: Ctrl-B, then D.", flush=True)
     if not options.detach:
         os.execvpe(command[0], command + ["attach-session", "-t", target], env)
 
@@ -193,6 +210,8 @@ def client_session(agent, options, arguments):
     remote = [script, "host", agent]
     if options.detach:
         remote.append("--detach")
+    if getattr(options, "fresh", False):
+        remote.append("--fresh")
     remote.append(options.name)
     if options.project:
         remote.append(options.project)
@@ -210,7 +229,8 @@ def client_session(agent, options, arguments):
         if not sys.stdin.isatty():
             fail("Attach from an interactive Terminal, or use --detach.")
         ssh.append("-t")
-    print(f"Connecting to {host}. The coding process and project files stay on that host.", flush=True)
+    if not getattr(options, "fresh", False):
+        print(f"Connecting to {host}. The coding process and project files stay on that host.", flush=True)
     if options.name == "list" or options.detach:
         os.execvp("ssh", [*ssh, host, shlex.join(remote)])
     attach_with_reconnect(ssh, host, remote, remote[:len(remote) - len(arguments)])
@@ -259,6 +279,7 @@ def main():
     parser.add_argument("mode", choices=["client", "host", "run"])
     parser.add_argument("agent", choices=["codex", "claude"])
     parser.add_argument("--detach", action="store_true", help="Start without attaching")
+    parser.add_argument("--fresh", action="store_true", help="Close the new session when its agent exits")
     parser.add_argument("name", nargs="?", default="main", help="Session number/name (default: session 1), or 'list'")
     parser.add_argument("project", nargs="?", help="Existing host project name or absolute path")
     raw = sys.argv[1:]

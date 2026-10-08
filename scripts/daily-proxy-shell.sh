@@ -3,9 +3,10 @@
 # back from the M1 to this Mac's proxy. A positive integer as the first
 # argument selects a persistent M1 session.
 #
-# Typed interactively, plain `claude` and `codex` open (or rejoin) a persistent
-# session on the home host for the current project, so the agent and its files
-# live there. Scripted and maintenance calls (print mode, subcommands, no
+# Typed interactively, plain `claude` and `codex` open a new persistent session
+# on the home host in the current project, so the agent and its files live
+# there. The session survives a dropped connection and closes when the agent
+# exits. Scripted and maintenance calls (print mode, subcommands, no
 # terminal) stay on this Mac. CLIPROXY_HOME_DEFAULT=0 keeps everything local;
 # `claude-local` and `codex-local` run one session here.
 
@@ -38,7 +39,7 @@ _cliproxy_home_route() {
   return 0
 }
 
-# Opens the home session for the current project: the repository's main
+# Opens a new home session for the current project: the repository's main
 # checkout under $HOME (worktrees map to their repository), otherwise $HOME.
 _cliproxy_home_open() {
   _cliproxy_agent=$1
@@ -49,10 +50,12 @@ _cliproxy_home_open() {
     *) _cliproxy_dir=$(git rev-parse --show-toplevel 2>/dev/null) || _cliproxy_dir= ;;
   esac
   case "$_cliproxy_dir" in
-    "$HOME"/?*) _cliproxy_name=$(basename "$_cliproxy_dir" | LC_ALL=C tr -c 'A-Za-z0-9_\n-' '-' | cut -c1-60) ;;
+    "$HOME"/?*) _cliproxy_name=$(basename "$_cliproxy_dir" | LC_ALL=C tr -c 'A-Za-z0-9_\n-' '-' | cut -c1-40) ;;
     *) _cliproxy_dir=$HOME _cliproxy_name=home ;;
   esac
-  "$HOME/.local/bin/$_cliproxy_agent-home" "$_cliproxy_name" "$_cliproxy_dir" -- "$@"
+  # Each call gets its own session; the name lets a dropped connection rejoin it.
+  _cliproxy_name="$_cliproxy_name-$(TZ=America/Los_Angeles date +%m%d-%H%M%S)"
+  "$HOME/.local/bin/$_cliproxy_agent-home" --fresh "$_cliproxy_name" "$_cliproxy_dir" -- "$@"
 }
 
 _cliproxy_define_functions() {

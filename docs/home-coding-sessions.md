@@ -58,7 +58,7 @@ Descriptive names retain exited terminal output for inspection. Numbered session
 
 | Terminal command | Inference route | Coding host |
 | --- | --- | --- |
-| `codex` / `claude` typed in a terminal | M1 proxy | Home M1, one persistent session per project |
+| `codex` / `claude` typed in a terminal | M1 proxy | Home M1, a new persistent session each time |
 | `claude -p`, subcommands, scripts (no terminal) | M1 proxy, else local proxy | Daily M5 |
 | `codex-local` / `claude-local` | M1 proxy, else local proxy | Daily M5 |
 | `codex NUMBER` / `claude NUMBER` | M1 proxy | Home M1 |
@@ -66,7 +66,7 @@ Descriptive names retain exited terminal output for inspection. Numbered session
 | `codex-home` / `claude-home` | M1 proxy | Home M1 |
 | `cx [NUMBER]` / `cl [NUMBER]` | M1 proxy | Home M1 |
 
-Typed in a terminal, plain `claude` or `codex` opens (or rejoins) a persistent session on the home host for the current repository. A worktree maps to its main checkout, and a folder outside any repository under the home folder opens the `home` session in the home folder. The host must have the same checkout at the same path; otherwise the launcher reports the missing folder. Print mode (`-p`), `--help`/`--version`, maintenance subcommands such as `mcp`, `update` and `exec`, and calls without a terminal stay on the daily Mac. Set `CLIPROXY_HOME_DEFAULT=0` to keep plain commands local. The SSH alias `home` in `~/.ssh/config` names the host; moving to a new machine means changing its `HostName` only.
+Typed in a terminal, plain `claude` or `codex` opens a new persistent session on the home host in the current repository, without a status line or banners. The session survives a dropped connection (the terminal reconnects) and closes when the agent exits. A worktree maps to its main checkout, and a folder outside any repository under the home folder opens the `home` session in the home folder. The host must have the same checkout at the same path; otherwise the launcher reports the missing folder. Print mode (`-p`), `--help`/`--version`, maintenance subcommands such as `mcp`, `update` and `exec`, and calls without a terminal stay on the daily Mac. Set `CLIPROXY_HOME_DEFAULT=0` to keep plain commands local. The SSH alias `home` in `~/.ssh/config` names the host; moving to a new machine means changing its `HostName` only.
 
 Install `scripts/daily-proxy-shell.sh` at `~/.config/cliproxyapi-custom/daily-proxy-shell.sh` on the daily Mac. Source it at the end of `~/.zshrc`, `~/.bashrc`, and `~/.bash_profile`:
 

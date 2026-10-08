@@ -171,8 +171,11 @@ class DailyProxyShellTests(unittest.TestCase):
                 with self.subTest(shell=shell, agent=agent):
                     result = self.run_shell(shell, agent + ' "$@"', "--model", "x", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=nested)
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(json.loads(result.stdout),
-                                     {"args": ["my-repo", str(repo), "--", "--model", "x"], "proxy": "home"})
+                    call = json.loads(result.stdout)
+                    self.assertEqual(call["proxy"], "home")
+                    self.assertEqual(call["args"][0], "--fresh")
+                    self.assertRegex(call["args"][1], r"^my-repo-[0-9]{4}-[0-9]{6}$")
+                    self.assertEqual(call["args"][2:], [str(repo), "--", "--model", "x"])
 
     def test_worktree_maps_to_its_main_repository(self):
         repo = self.make_repo("app")
@@ -184,14 +187,18 @@ class DailyProxyShellTests(unittest.TestCase):
             with self.subTest(shell=shell):
                 result = self.run_shell(shell, "claude", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=worktree)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout)["args"], ["app", str(repo), "--"])
+                args = json.loads(result.stdout)["args"]
+                self.assertRegex(args[1], r"^app-")
+                self.assertEqual(args[2:], [str(repo), "--"])
 
     def test_outside_a_repository_uses_home_folder_session(self):
         for shell in SHELLS:
             with self.subTest(shell=shell):
                 result = self.run_shell(shell, "codex", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=self.root)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout), {"args": ["home", str(self.root), "--"], "proxy": "home"})
+                args = json.loads(result.stdout)["args"]
+                self.assertRegex(args[1], r"^home-")
+                self.assertEqual(args[2:], [str(self.root), "--"])
 
     def test_scripted_and_maintenance_calls_stay_local_even_in_a_terminal(self):
         repo = self.make_repo("app")
