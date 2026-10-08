@@ -24,6 +24,14 @@ NATIVE_FEEL = [
     "set -g allow-passthrough on",
     "set -s escape-time 0",
     "set -g history-limit 100000",
+    # Full color (Claude dims to 256 colors otherwise) and agent tab titles.
+    'set -g default-terminal "tmux-256color"',
+    "set -as terminal-features ',xterm*:RGB'",
+    "set -as terminal-features ',*256col*:RGB'",
+    "set-environment -g COLORTERM truecolor",
+    "set -g set-titles on",
+    "set -g set-titles-string '#T'",
+    "set -g allow-rename on",
 ]
 PREFIX = "home-"
 
