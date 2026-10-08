@@ -71,8 +71,8 @@ class HomeCodingTests(unittest.TestCase):
             home.host_session("claude", options, [])
         commands = [" ".join(call.args[0]) for call in run.call_args_list]
         self.assertTrue(any("new-session" in command for command in commands))
-        self.assertIn("set-option -t =home-claude-app-1008-091500 remain-on-exit off", commands[2])
-        self.assertIn("set-option -t =home-claude-app-1008-091500 status off", commands[3])
+        self.assertIn("set-option -t =home-claude-app-1008-091500: remain-on-exit off", commands[2])
+        self.assertIn("set-option -t =home-claude-app-1008-091500: status off", commands[3])
 
     def test_numbered_list_orders_numbers_and_preserves_legacy_names(self):
         output = "\n".join([

@@ -189,9 +189,9 @@ def host_session(agent, options, arguments):
             fail(created.stderr.strip())
         if created.returncode == 0 and getattr(options, "fresh", False):
             # A one-off session closes when its agent exits instead of lingering.
-            tmux("set-option", "-t", target, "remain-on-exit", "off")
+            tmux("set-option", "-t", pane_target, "remain-on-exit", "off")
             # Look like the agent running in a plain terminal: no tmux status line.
-            tmux("set-option", "-t", target, "status", "off")
+            tmux("set-option", "-t", pane_target, "status", "off")
         # A simultaneous creator must not let us attach to a different project.
         saved = tmux("display-message", "-p", "-t", pane_target, "#{pane_start_path}", check=True).stdout.strip()
         if str(directory) != saved:
