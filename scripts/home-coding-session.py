@@ -160,8 +160,8 @@ def host_session(agent, options, arguments):
         if directory and str(directory) != saved:
             fail(f"This session already uses {saved}; choose another session name for {directory}.")
         directory = Path(saved)
-        restartable = options.name == "main" or re.fullmatch(r"[1-9][0-9]*", options.name)
-        if restartable and tmux("display-message", "-p", "-t", pane_target, "#{pane_dead}", check=True).stdout.strip() == "1":
+        # A pane whose agent exited is never useful; restart it in place.
+        if tmux("display-message", "-p", "-t", pane_target, "#{pane_dead}", check=True).stdout.strip() == "1":
             tmux("respawn-pane", "-t", pane_target, "-c", str(directory), "--", *launch_command(), check=True)
             print("The previous agent exited; starting it again. Saved conversations remain available in the agent's resume menu.")
         elif arguments:

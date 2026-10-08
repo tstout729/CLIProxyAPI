@@ -17,7 +17,7 @@ class DailyProxyShellTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.native = self.root / "native"
         self.native.mkdir()
         self.launchers = self.root / ".local/bin"
@@ -49,7 +49,7 @@ class DailyProxyShellTests(unittest.TestCase):
             )
             home.chmod(0o755)
 
-    def run_shell(self, shell, command, *arguments, extra=None):
+    def run_shell(self, shell, command, *arguments, extra=None, cwd=None):
         env = os.environ.copy()
         for key in ("TEST_PROXY", "TEST_PROXY_EXIT", "TEST_HOME_EXIT", "TEST_NATIVE_EXIT"):
             env.pop(key, None)
@@ -58,8 +58,14 @@ class DailyProxyShellTests(unittest.TestCase):
         return subprocess.run(
             [shell, "-f" if Path(shell).name == "zsh" else "--noprofile", "-c",
              '. "$1"; shift; ' + command, "test", str(SOURCE), *arguments],
-            env=env, capture_output=True, text=True, timeout=10,
+            env=env, capture_output=True, text=True, timeout=10, cwd=cwd,
         )
+
+    def make_repo(self, name):
+        repo = self.root / "projects" / name
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        return repo
 
     def test_plain_names_use_proxy_without_recursing_and_preserve_arguments(self):
         arguments = ["--model", "model-name", "spaces and 'quotes'", "$(never-run); `never-run`"]
@@ -155,6 +161,60 @@ class DailyProxyShellTests(unittest.TestCase):
                 result = self.run_shell(shell, "claude-m5", extra={"TEST_NATIVE_EXIT": "7"})
                 self.assertEqual(result.returncode, 7)
 
+
+    def test_interactive_bare_commands_open_home_session_for_current_repository(self):
+        repo = self.make_repo("my repo")
+        nested = repo / "src"
+        nested.mkdir()
+        for shell in SHELLS:
+            for agent in ("codex", "claude"):
+                with self.subTest(shell=shell, agent=agent):
+                    result = self.run_shell(shell, agent + ' "$@"', "--model", "x", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=nested)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout),
+                                     {"args": ["my-repo", str(repo), "--", "--model", "x"], "proxy": "home"})
+
+    def test_worktree_maps_to_its_main_repository(self):
+        repo = self.make_repo("app")
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                        "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        worktree = self.root / "projects" / "app-wt" / "feature"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(worktree)], check=True)
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                result = self.run_shell(shell, "claude", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=worktree)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["args"], ["app", str(repo), "--"])
+
+    def test_outside_a_repository_uses_home_folder_session(self):
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                result = self.run_shell(shell, "codex", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=self.root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {"args": ["home", str(self.root), "--"], "proxy": "home"})
+
+    def test_scripted_and_maintenance_calls_stay_local_even_in_a_terminal(self):
+        repo = self.make_repo("app")
+        cases = {"claude": [["-p", "hi"], ["--print"], ["mcp", "list"], ["--version"], ["update"]],
+                 "codex": [["exec", "task"], ["login"], ["--help"], ["mcp", "list"]]}
+        for shell in SHELLS:
+            for agent, calls in cases.items():
+                for arguments in calls:
+                    with self.subTest(shell=shell, agent=agent, arguments=arguments):
+                        result = self.run_shell(shell, agent + ' "$@"', *arguments, extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=repo)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout), {"args": arguments, "proxy": "m1"})
+
+    def test_opt_out_and_local_commands_keep_this_mac(self):
+        repo = self.make_repo("app")
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                result = self.run_shell(shell, "claude; claude-local; codex-local",
+                                        extra={"CLIPROXY_ASSUME_TTY": "1", "CLIPROXY_HOME_DEFAULT": "0"}, cwd=repo)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([json.loads(line)["proxy"] for line in result.stdout.splitlines()], ["m1"] * 3)
+                local = self.run_shell(shell, "claude-local", extra={"CLIPROXY_ASSUME_TTY": "1"}, cwd=repo)
+                self.assertEqual(json.loads(local.stdout)["proxy"], "m1")
 
 if __name__ == "__main__":
     unittest.main()

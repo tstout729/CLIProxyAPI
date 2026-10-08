@@ -56,6 +56,14 @@ class HomeCodingTests(unittest.TestCase):
         self.assertIn("respawn-pane", run.call_args.args[0])
         self.assertNotIn("-k", run.call_args.args[0])
 
+    def test_project_session_restarts_exited_agent(self):
+        options = type("Options", (), {"name": "simply-ops", "project": None, "detach": True})()
+        responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/simply-ops\n", "1\n", ""]]
+        with patch.object(home, "tmux_command", return_value=(["tmux"], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
+            home.host_session("claude", options, [])
+        self.assertIn("respawn-pane", run.call_args.args[0])
+        self.assertIn("=home-claude-simply-ops:", run.call_args.args[0])
+
     def test_numbered_list_orders_numbers_and_preserves_legacy_names(self):
         output = "\n".join([
             "home-codex-10\t0\t0\t/tmp/ten",
@@ -155,10 +163,10 @@ class HomeCodingTests(unittest.TestCase):
 
     def test_existing_session_does_not_resubmit_prompt(self):
         options = type("Options", (), {"name": "task", "project": None, "detach": True})()
-        responses = [subprocess.CompletedProcess([], 0, "", ""), subprocess.CompletedProcess([], 0, "/tmp/old-project\n", "")]
+        responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/old-project\n", "0\n"]]
         with patch.object(home, "tmux_command", return_value=(["tmux", "-L", home.SOCKET], {})), patch.object(home.subprocess, "run", side_effect=responses) as run, contextlib.redirect_stdout(io.StringIO()):
             home.host_session("claude", options, ["Do not repeat this prompt"])
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_count, 3)
         self.assertTrue(all("send-keys" not in call.args[0] and "new-session" not in call.args[0] for call in run.call_args_list))
 
     def test_conflicting_project_is_rejected(self):

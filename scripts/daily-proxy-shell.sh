@@ -2,23 +2,94 @@
 # The proxy launchers scope gateway settings to their child processes and fall
 # back from the M1 to this Mac's proxy. A positive integer as the first
 # argument selects a persistent M1 session.
+#
+# Typed interactively, plain `claude` and `codex` open (or rejoin) a persistent
+# session on the home host for the current project, so the agent and its files
+# live there. Scripted and maintenance calls (print mode, subcommands, no
+# terminal) stay on this Mac. CLIPROXY_HOME_DEFAULT=0 keeps everything local;
+# `claude-local` and `codex-local` run one session here.
+
+# Succeeds when this call should run on the home host. $1 is the agent.
+_cliproxy_home_route() {
+  _cliproxy_agent=$1
+  shift
+  [ "${CLIPROXY_HOME_DEFAULT:-1}" = 0 ] && return 1
+  if [ "${CLIPROXY_ASSUME_TTY:-}" != 1 ]; then
+    [ -t 0 ] && [ -t 1 ] || return 1
+  fi
+  for _cliproxy_arg in "$@"; do
+    case "$_cliproxy_arg" in
+      -p|--print|-h|--help|-v|--version|--output-format|--output-format=*|--input-format|--input-format=*) return 1 ;;
+    esac
+  done
+  case "${1-}" in
+    ''|-*) return 0 ;;
+  esac
+  # Subcommands manage this Mac's install or run non-interactively.
+  if [ "$_cliproxy_agent" = claude ]; then
+    case "$1" in
+      mcp|config|doctor|update|upgrade|install|migrate-installer|setup-token|auth|plugin|plugins|agents|remote-control|rc) return 1 ;;
+    esac
+  else
+    case "$1" in
+      exec|e|login|logout|mcp|mcp-server|app-server|proto|completion|debug|apply|a|cloud|sandbox|features|help|generate-ts|responses-api-proxy|stdio-to-uds) return 1 ;;
+    esac
+  fi
+  return 0
+}
+
+# Opens the home session for the current project: the repository's main
+# checkout under $HOME (worktrees map to their repository), otherwise $HOME.
+_cliproxy_home_open() {
+  _cliproxy_agent=$1
+  shift
+  _cliproxy_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || _cliproxy_dir=
+  case "$_cliproxy_dir" in
+    */.git) _cliproxy_dir=${_cliproxy_dir%/.git} ;;
+    *) _cliproxy_dir=$(git rev-parse --show-toplevel 2>/dev/null) || _cliproxy_dir= ;;
+  esac
+  case "$_cliproxy_dir" in
+    "$HOME"/?*) _cliproxy_name=$(basename "$_cliproxy_dir" | LC_ALL=C tr -c 'A-Za-z0-9_\n-' '-' | cut -c1-60) ;;
+    *) _cliproxy_dir=$HOME _cliproxy_name=home ;;
+  esac
+  "$HOME/.local/bin/$_cliproxy_agent-home" "$_cliproxy_name" "$_cliproxy_dir" -- "$@"
+}
 
 _cliproxy_define_functions() {
   codex() {
     case "${1-}" in
-      ''|*[!0-9]*|0*) "$HOME/.local/bin/codex-m1" "$@" ;;
-      *) "$HOME/.local/bin/codex-home" "$@" ;;
+      ''|*[!0-9]*|0*) ;;
+      *) "$HOME/.local/bin/codex-home" "$@"; return ;;
     esac
+    if _cliproxy_home_route codex "$@"; then
+      _cliproxy_home_open codex "$@"
+    else
+      "$HOME/.local/bin/codex-m1" "$@"
+    fi
   }
 
   claude() {
     case "${1-}" in
-      ''|*[!0-9]*|0*) "$HOME/.local/bin/claude-m1" "$@" ;;
-      *) "$HOME/.local/bin/claude-home" "$@" ;;
+      ''|*[!0-9]*|0*) ;;
+      *) "$HOME/.local/bin/claude-home" "$@"; return ;;
     esac
+    if _cliproxy_home_route claude "$@"; then
+      _cliproxy_home_open claude "$@"
+    else
+      "$HOME/.local/bin/claude-m1" "$@"
+    fi
   }
 }
 _cliproxy_define_functions
+
+# Run one session on this Mac through the proxy, skipping the home host.
+claude-local() {
+  "$HOME/.local/bin/claude-m1" "$@"
+}
+
+codex-local() {
+  "$HOME/.local/bin/codex-m1" "$@"
+}
 
 # Terminal apps such as cmux install their own `claude` function after startup
 # files run, which skipped the proxy. Reclaim the name before each prompt. The
