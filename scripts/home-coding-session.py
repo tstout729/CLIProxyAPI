@@ -241,7 +241,32 @@ def client_session(agent, options, arguments):
         print(f"Connecting to {host}. The coding process and project files stay on that host.", flush=True)
     if options.name == "list" or options.detach:
         os.execvp("ssh", [*ssh, host, shlex.join(remote)])
+        return
+    mosh = mosh_command(ssh, host, remote)
+    if mosh:
+        os.execvp(mosh[0], mosh)
+        return
     attach_with_reconnect(ssh, host, remote, remote[:len(remote) - len(arguments)])
+
+
+def mosh_command(ssh, host, remote):
+    """Attach over mosh when it is installed: it rides out Wi-Fi drops, sleep,
+    and network changes without a reconnect, and types without waiting on the
+    link. HOME_CODING_TRANSPORT=ssh keeps the plain SSH route."""
+    if os.environ.get("HOME_CODING_TRANSPORT", "mosh") != "mosh":
+        return None
+    client = shutil.which("mosh")
+    if not client:
+        return None
+    server = os.environ.get("HOME_CODING_MOSH_SERVER", "/opt/homebrew/bin/mosh-server")
+    # mosh-server refuses to start without a UTF-8 locale, which a
+    # non-interactive SSH login on macOS does not set.
+    locale = os.environ.get("LANG", "")
+    if "UTF-8" not in locale.upper().replace("UTF8", "UTF-8"):
+        locale = "en_US.UTF-8"
+    # mosh adds its own terminal request to the bootstrap SSH call.
+    bootstrap = [option for option in ssh if option != "-t"]
+    return [client, "--ssh=" + shlex.join(bootstrap),"--server=" + shlex.join(["env", "LANG=" + locale, server]), host, "--", *remote]
 
 
 # ssh exits 255 when the connection fails or drops; tmux exits 0 on detach.

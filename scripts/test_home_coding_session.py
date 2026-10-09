@@ -149,6 +149,34 @@ class HomeCodingTests(unittest.TestCase):
         self.assertIn(options.project, remote)
         self.assertNotIn("-t", command)
 
+    def test_attach_uses_mosh_with_literal_arguments_when_installed(self):
+        options = type("Options", (), {"name": "task", "project": None, "detach": False, "fresh": True})()
+        prompt = "Read 'quoted' text; $(touch unwanted)"
+        with patch.dict(os.environ, {"HOME_CODING_SSH_HOST": "user@home"}, clear=True), \
+                patch.object(home.shutil, "which", return_value="/opt/homebrew/bin/mosh"), \
+                patch.object(home.sys.stdin, "isatty", return_value=True), \
+                patch.object(home.os, "execvp") as execute, patch.object(home, "attach_with_reconnect") as fallback:
+            home.client_session("claude", options, [prompt])
+        fallback.assert_not_called()
+        command = execute.call_args.args[1]
+        self.assertEqual(command[0], "/opt/homebrew/bin/mosh")
+        self.assertIn("--server=env LANG=en_US.UTF-8 /opt/homebrew/bin/mosh-server", command)
+        boundary = command.index("--")
+        self.assertEqual(command[boundary - 1], "user@home")
+        self.assertEqual(command[-1], prompt)
+        self.assertNotIn("-t", shlex.split(command[1].removeprefix("--ssh=")))
+
+    def test_attach_keeps_ssh_without_mosh_or_when_requested(self):
+        options = type("Options", (), {"name": "task", "project": None, "detach": False, "fresh": True})()
+        for env, which in (({}, None), ({"HOME_CODING_TRANSPORT": "ssh"}, "/opt/homebrew/bin/mosh")):
+            with self.subTest(env=env), patch.dict(os.environ, {"HOME_CODING_SSH_HOST": "user@home", **env}, clear=True), \
+                    patch.object(home.shutil, "which", return_value=which), \
+                    patch.object(home.sys.stdin, "isatty", return_value=True), \
+                    patch.object(home.os, "execvp") as execute, patch.object(home, "attach_with_reconnect") as fallback:
+                home.client_session("claude", options, [])
+            execute.assert_not_called()
+            fallback.assert_called_once()
+
     def test_ssh_can_use_installed_python_without_developer_tools(self):
         options = type("Options", (), {"name": "main", "project": None, "detach": True})()
         with patch.dict(os.environ, {"HOME_CODING_SSH_HOST": "user@home", "HOME_CODING_REMOTE_PYTHON": "/opt/homebrew/bin/python3"}, clear=True), patch.object(home.os, "execvp") as execute, contextlib.redirect_stdout(io.StringIO()):
