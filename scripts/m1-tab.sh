@@ -3,7 +3,8 @@
 # windows in the session group "main" on a dedicated server; m1-sidebar draws
 # the list on the left of every tab. Each window gets its own grouped session,
 # so windows can show different tabs. Tabs keep running when a window closes;
-# the next window shows them again.
+# the next window shows them again. A window opened while another one is
+# showing the list starts on a new tab instead of mirroring that window's tab.
 PATH="/opt/homebrew/bin:$PATH"
 # A dedicated tmux server, so tab shells never inherit another tool's setup (cmux's).
 unset ZDOTDIR
@@ -20,6 +21,9 @@ tm set -g @m1_sidebar_cmd "$python -I $sidebar" \; source-file "$conf"
 M1_TABS_SOCKET="$socket" "$python" -I "$sidebar" ensure
 
 view="w-$(date +%m%d-%H%M%S)-$$"
+if tm list-sessions -F '#{session_group} #{session_attached}' | grep -q '^main [1-9]'; then
+  exec tmux -L "$socket" new-session -t main -s "$view" \; set destroy-unattached on \; new-window -c "$HOME"
+fi
 last=$(tm show -gqv @m1_last_tab)
 if [ -n "$last" ] && tm list-windows -t =main -F '#{window_id}' | grep -qx "$last"; then
   exec tmux -L "$socket" new-session -t main -s "$view" \; set destroy-unattached on \; select-window -t "=$view:$last"
