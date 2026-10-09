@@ -8,6 +8,8 @@ PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 export LANG="${LANG:-en_US.UTF-8}"
 export MOSH_PREDICTION_DISPLAY=always
+# Window titles are the tab's own title, without mosh's "[mosh]" prefix.
+export MOSH_TITLE_NOPREFIX=1
 # mosh checks the terminal type locally; use a standard one if this Mac lacks its description.
 infocmp "${TERM:-dumb}" >/dev/null 2>&1 || export TERM=xterm-256color
 set -- mosh --server="env LANG=en_US.UTF-8 /opt/homebrew/bin/mosh-server" home -- "/Users/trevorstout/.local/bin/m1-tab"
