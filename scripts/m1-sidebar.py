@@ -15,11 +15,15 @@ show different tabs of the same list.
                 every tab a sidebar at the right width, then redraw them all
   refresh       redraw every sidebar now
   restart       restart every sidebar (after installing a new version)
+  new-tab [SESSION]
+                open a tab with its sidebar already in place (and show it in
+                SESSION); prints its window id
   rename CLIENT ask CLIENT for a new name for the tab it shows
   jump CLIENT   show CLIENT the next tab that needs you or has finished
 """
 
 from collections import namedtuple
+from contextlib import contextmanager
 import fcntl
 import os
 from pathlib import Path
@@ -42,6 +46,8 @@ AGENTS = re.compile(r"^(claude|codex|\d+[._]\d+[._]\d+)$")
 WORKING = re.compile(r"esc to interrupt|Waiting for \d+ background agents?", re.I)
 # Footers of permission prompts and questions waiting on an answer.
 ASKING = re.compile(r"esc to cancel|enter to select|enter to confirm", re.I)
+# Screens that belong to an agent even when its process has a generic name (Codex runs as node).
+AGENT_SCREEN = re.compile(r"esc to interrupt|\? for shortcuts|bypass permissions|Ask Codex", re.I)
 SEP = "\x1f"
 MARK = "\x1e"
 PANE_FIELDS = [
@@ -54,9 +60,15 @@ PANE_FIELDS = [
 # A working tab must look idle this long before it counts as finished: the
 # footer can drop "esc to interrupt" for a moment between steps.
 SETTLE = 3.0
-SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# A prompt must stay up this long before the tab says it needs you, so passing
+# menus do not blink the dot on and off.
+ASK_SETTLE = 1.5
 DOUBLE_CLICK = 0.4
-FRAME = 0.12
+# Working tabs show a dot that slowly brightens and dims (one cell per step),
+# rather than a fast spinner that keeps the whole sidebar moving.
+PULSE_STEP = 0.4
+# A poll that fails this many times in a row shows its error; fewer keep the last frame.
+FAILURES_SHOWN = 3
 
 
 def rgb(color, ground=38):
@@ -76,6 +88,7 @@ BRIGHT = rgb("#e8eaed")
 MUTED = rgb("#6b7280")
 FAINT = rgb("#4b5263")
 BLUE = rgb("#61afef")
+PULSE = [rgb(color) for color in ("#61afef", "#5a9fd8", "#4f8bbd", "#467aa5", "#4f8bbd", "#5a9fd8")]
 GREEN = rgb("#98c379")
 YELLOW = rgb("#e5c07b")
 RED = rgb("#e06c75")
@@ -178,11 +191,17 @@ def short_path(path, home=None):
     return path
 
 
-def kind_of(pane):
+def screen_tail(screen, lines=24):
+    return "\n".join([line for line in screen.splitlines() if line.strip()][-lines:])
+
+
+def kind_of(pane, screen=None):
     command = pane["pane_current_command"]
     if command in SHELLS:
         return "shell"
     if AGENTS.match(command) or pane["pane_title"].startswith("✳"):
+        return "agent"
+    if screen and AGENT_SCREEN.search(screen_tail(screen)):
         return "agent"
     return "program"
 
@@ -196,6 +215,10 @@ def tab_title(group, home=None):
         return pane["window_name"]
     # Agents put a status glyph in front of their title ("✳ Fix invoices"); the sidebar shows status itself.
     title = re.sub(r"^[^\w\s~/.]{1,2}\s+", "", pane["pane_title"].strip())
+    # Codex ends its title with the folder name ("Fix invoices | ops"); the status line shows the folder.
+    folder = pane["pane_current_path"].rstrip("/").rsplit("/", 1)[-1]
+    if folder and title.endswith(f" | {folder}"):
+        title = title[:-len(folder) - 3]
     if title and title not in (pane["host"], pane["host_short"]):
         return title
     if pane["pane_current_command"] in SHELLS:
@@ -207,7 +230,7 @@ def observe(screen):
     """What an agent's screen says it is doing, or None when the screen is unknown."""
     if screen is None:
         return None
-    tail = "\n".join([line for line in screen.splitlines() if line.strip()][-24:])
+    tail = screen_tail(screen)
     if ASKING.search(tail):
         return "asking"
     return "working" if WORKING.search(tail) else "idle"
@@ -224,10 +247,14 @@ def advance(prev, observed, seen, now):
     unread = unread and not seen
     if observed is None or observed == state:
         return state, since or now, unread, 0.0
-    if state == "working" and observed == "idle":
+    finishing = state == "working" and observed == "idle"
+    settle = SETTLE if finishing else ASK_SETTLE if observed == "asking" else 0.0
+    if settle:
+        # `leaving` holds when the new state first showed; change only once it has held.
         leaving = leaving or now
-        if now - leaving < SETTLE:
+        if now - leaving < settle:
             return state, since, unread, leaving
+    if finishing:
         return observed, now, not seen, 0.0
     return observed, now, unread and observed != "working", 0.0
 
@@ -236,7 +263,7 @@ def describe(group, screen, focused, now, home=None):
     """(Tab, option changes) for one tab; changes map option names to new values (None unsets)."""
     pane = main_pane(group)
     first = group[0]
-    kind = kind_of(pane) if pane else "shell"
+    kind = kind_of(pane, screen) if pane else "shell"
     stored = (first["@m1_state"], float(first["@m1_since"] or 0), truthy(first["@m1_unread"]),
               float(first["@m1_leaving"] or 0))
     changes = {}
@@ -319,11 +346,12 @@ def wrap(text, width, lines):
 
 
 def ago(seconds):
+    """Whole minutes, hours or days; "" under a minute, so nothing ticks every second."""
     seconds = max(0, int(seconds))
     for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
         if seconds >= size:
             return f"{seconds // size}{unit}"
-    return f"{seconds}s"
+    return ""
 
 
 def status(tab, now, frame=0):
@@ -333,11 +361,11 @@ def status(tab, now, frame=0):
     if tab.bell or tab.state == "asking":
         return "●", YELLOW, "Needs you" + where, YELLOW
     if tab.state == "working":
-        return SPINNER[frame % len(SPINNER)], BLUE, f"Working · {elapsed}{where}", MUTED
+        return "●", PULSE[frame % len(PULSE)], "Working" + (f" · {elapsed}" if elapsed else "") + where, MUTED
     if tab.unread:
-        return "●", GREEN, f"Done · {elapsed} ago{where}", GREEN
+        return "●", GREEN, "Done · " + (f"{elapsed} ago" if elapsed else "just now") + where, GREEN
     if tab.kind == "agent":
-        return " ", MUTED, f"Idle · {elapsed}{where}", MUTED
+        return " ", MUTED, "Idle" + (f" · {elapsed}" if elapsed else "") + where, MUTED
     if tab.kind == "program":
         return " ", MUTED, f"{tab.command} · {tab.path}", MUTED
     return " ", MUTED, tab.path if tab.path != tab.title else "Shell", MUTED
@@ -392,6 +420,20 @@ def render(tabs, current, width, height, now, hover=None, drag=None, frame=0):
     return lines[:height], rows, closers
 
 
+def frame_updates(old, new):
+    """Escape codes that turn the rows `old` into `new`, touching only rows that differ.
+
+    Rows are drawn full width with line wrap off, so the cursor ends on the last
+    cell; erasing to the end of the line there would wipe that cell. Blank rows
+    are cleared whole instead.
+    """
+    out = []
+    for row, line in enumerate(new):
+        if row >= len(old) or old[row] != line:
+            out.append(f"\x1b[{row + 1};1H" + (line if line else "\x1b[2K"))
+    return "".join(out)
+
+
 class Sidebar:
     """The long-running process in a sidebar pane."""
 
@@ -401,7 +443,9 @@ class Sidebar:
         self.panes, self.tabs = [], []
         self.current = None
         self.visible = False
-        self.last_frame = None
+        self.last_lines, self.last_size = None, None
+        self.failures = 0
+        self.ready = False
         self.hover, self.hover_until = None, 0.0
         self.press, self.drag = None, None
 
@@ -421,7 +465,8 @@ class Sidebar:
         self.current = own[0]["window_id"]
         groups = windows_of(self.panes)
         mains = [main_pane(group) for group in groups]
-        screens, focused = snapshot([pane["pane_id"] for pane in mains if pane and kind_of(pane) == "agent"])
+        # Read every tab that is not a plain shell: Codex, for one, runs as node.
+        screens, focused = snapshot([pane["pane_id"] for pane in mains if pane and kind_of(pane) != "shell"])
         now = time.time()
         self.tabs, writes = [], []
         for group, pane in zip(groups, mains):
@@ -433,6 +478,8 @@ class Sidebar:
         if writes:
             tmux(*writes[1:])
         self.visible = int(own[0]["window_active_clients"] or 0) > 0
+        if not self.visible:
+            self.hover, self.drag, self.press = None, None, None  # The mouse is in another tab's sidebar now.
         # Poll often only while someone is looking; hooks signal structural changes.
         return 1.0 if self.visible else 5.0
 
@@ -446,19 +493,22 @@ class Sidebar:
         width = os.get_terminal_size(sys.stdout.fileno()).columns
         return target, y in self.closers and x >= width - 3
 
-    def paint(self):
+    def paint(self, full=False):
+        """Draw the list, writing only the rows that changed since the last paint."""
         width, height = os.get_terminal_size(sys.stdout.fileno())
-        frame_number = int(time.monotonic() / FRAME)
         lines, self.rows, self.closers = render(self.tabs, self.current, width, height, time.time(),
-                                                self.hover_state(), self.drag, frame_number)
-        frame = "".join(f"\x1b[{row + 1};1H{line}\x1b[K" for row, line in enumerate(lines)) + "\x1b[J"
-        if frame != self.last_frame:
-            sys.stdout.write("\x1b[H" + frame)
+                                                self.hover_state(), self.drag, int(time.monotonic() / PULSE_STEP))
+        lines += [""] * (height - len(lines))
+        if full or self.last_size != (width, height):
+            self.last_lines, self.last_size = [None] * height, (width, height)
+        out = frame_updates(self.last_lines, lines)
+        if out:
+            sys.stdout.write(out)
             sys.stdout.flush()
-            self.last_frame = frame
+        self.last_lines = lines
 
     def animating(self):
-        return self.visible and any(tab.state == "working" for tab in self.tabs)
+        return self.visible and any(tab.state == "working" and not tab.bell for tab in self.tabs)
 
     def clicking_client(self):
         """The client that clicked: the focused one showing this tab, else the most recently active."""
@@ -498,7 +548,9 @@ class Sidebar:
             tmux("kill-window", "-t", window_id)
             return
         command = pane["pane_current_command"]
-        program = "Codex" if command == "codex" else "Claude" if kind_of(pane) == "agent" else command
+        kind = next((tab.kind for tab in self.tabs if tab.window_id == window_id), "program")
+        program = "Codex" if command in ("codex", "node") and kind == "agent" else "Claude" if kind == "agent" \
+            else command
         self.menu_at(client, x, y, "Close this tab?",
                      [f"Close tab and stop {program}", "y", f"kill-window -t {window_id}",
                       "Cancel", "Escape", ""])
@@ -564,9 +616,10 @@ class Sidebar:
             target = self.rows.get(y)
             closing = y in self.closers and x >= width - 3
             if button & 32:  # Motion, with or without a button held.
+                # Leaving the pane sends nothing, so a hover ends on its own: at once when
+                # the pointer was last on the outer column or row, else after a pause.
                 edge = x >= width - 1 or y in (0, height - 1)
-                # Leaving the pane sends nothing, so a hover ends on its own (quickly near an edge).
-                self.hover, self.hover_until = (x, y), time.monotonic() + (0.3 if edge else 6.0)
+                self.hover, self.hover_until = (x, y), time.monotonic() + (0.15 if edge else 3.0)
                 if button & 3 != 0:  # No button held: a release outside the pane went elsewhere.
                     self.press, self.drag = None, None
                 elif self.press and self.press[0] == 0 and not self.press[2] and \
@@ -591,7 +644,7 @@ class Sidebar:
             name, session = client
             if target == "new":
                 if press[0] == 0:
-                    tmux("new-window", "-t", f"{session}:", "-c", os.path.expanduser("~"))
+                    new_tab(session)
             elif press[0] == 1 or (press[0] == 0 and press[2] and closing):
                 self.close(name, target, x, y)
             elif press[0] == 0:
@@ -617,7 +670,9 @@ class Sidebar:
             termios.tcsetattr(stdin, termios.TCSANOW, attrs)
         # Hide the cursor, stop line wrap, and ask for every mouse event (SGR
         # encoding): presses, drags, and plain motion for hover.
-        sys.stdout.write("\x1b[?25l\x1b[?7l\x1b[?1003h\x1b[?1006h\x1b[2J")
+        # The first frame is drawn over a cleared pane in one write (see paint), so
+        # a new sidebar never shows a blank panel while it reads the tabs.
+        sys.stdout.write("\x1b[?25l\x1b[?7l\x1b[?1003h\x1b[?1006h")
         sys.stdout.flush()
         next_poll = 0.0
         while True:
@@ -628,13 +683,21 @@ class Sidebar:
                         return
                     next_poll = time.monotonic() + wait
                 self.paint()
+                if self.failures or not self.ready:
+                    self.ready = True  # new-tab waits for this before showing the tab.
+                    tmux("set-option", "-p", "-t", self.pane, "@sidebar_ready", "1")
+                self.failures = 0
             except Exception as error:  # Keep the pane alive; a crash would only respawn it.
-                sys.stdout.write(f"\x1b[H\x1b[2J{MUTED}sidebar error:\r\n{fit(str(error), 60)}{RESET}")
-                sys.stdout.flush()
-                self.last_frame, next_poll = None, time.monotonic() + 5.0
+                # A tab closing mid-poll fails once; keep the last frame unless it keeps failing.
+                self.failures += 1
+                if self.failures >= FAILURES_SHOWN:
+                    sys.stdout.write(f"\x1b[H\x1b[2J{MUTED}sidebar error:\r\n{fit(str(error), 60)}{RESET}")
+                    sys.stdout.flush()
+                    self.last_size = None
+                next_poll = time.monotonic() + (1.0 if self.failures < FAILURES_SHOWN else 5.0)
             timeout = next_poll - time.monotonic()
             if self.animating():
-                timeout = min(timeout, FRAME)
+                timeout = min(timeout, PULSE_STEP - time.monotonic() % PULSE_STEP)
             if self.hover is not None:
                 if time.monotonic() > self.hover_until:
                     self.hover = None
@@ -644,7 +707,7 @@ class Sidebar:
             ready, _, _ = select.select([wake_r, stdin], [], [], max(0.0, timeout))
             if wake_r in ready:
                 os.read(wake_r, 512)
-                next_poll = 0.0
+                next_poll = 0.0  # SIGUSR1 (tabs changed) or SIGWINCH; paint() notices a new size.
             if stdin in ready:
                 data = os.read(stdin, 4096)
                 if not data:
@@ -666,10 +729,58 @@ def style_sidebar(pane_id):
          "set-option", "-p", "-t", pane_id, "@sidebar_styled", "1")
 
 
-def ensure():
+@contextmanager
+def tabs_lock():
+    """Serialize changes to the tab layout (ensure, new tabs) across processes."""
     lock_path = Path(os.environ.get("TMPDIR", "/tmp")) / f"m1-sidebar.{os.getuid()}.lock"
     with open(lock_path, "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def sidebar_width(window_width):
+    return min(WIDTH, max(16, window_width // 4))
+
+
+def add_sidebar(window_id, width):
+    # Mark the pane before the sidebar starts. remain-on-exit keeps a crashed
+    # sidebar on screen with its error instead of looping through respawns.
+    pane_id = tmux("split-window", "-fhbd", "-l", str(width), "-t", window_id,
+                   "-P", "-F", "#{pane_id}", "exec cat").strip()
+    if pane_id:
+        style_sidebar(pane_id)
+        tmux("set-option", "-p", "-t", pane_id, "@sidebar", "1", ";",
+             "set-option", "-p", "-t", pane_id, "remain-on-exit", "on", ";",
+             "respawn-pane", "-k", "-t", pane_id, sidebar_command())
+    return pane_id
+
+
+def new_tab(session=None):
+    """Open a tab in the home folder that already has its sidebar; show it in `session` if given.
+
+    Building the sidebar before the tab is shown spares a frame of full-width
+    shell that then jumps narrower. Returns the new window's id.
+    """
+    with tabs_lock():
+        out = tmux("new-window", "-d", "-P", "-F", f"#{{window_id}}{SEP}#{{window_width}}",
+                   "-t", f"{session}:" if session else f"={GROUP}:", "-c", os.path.expanduser("~"))
+        window_id, _, window_width = out.strip().partition(SEP)
+        if not window_id:
+            return ""
+        pane_id = add_sidebar(window_id, sidebar_width(int(window_width or 0)))
+    # Show the tab once its sidebar has drawn, so the panel never appears empty.
+    deadline = time.monotonic() + 0.5
+    while pane_id and time.monotonic() < deadline:
+        if tmux("display-message", "-p", "-t", pane_id, "#{@sidebar_ready}").strip() == "1":
+            break
+        time.sleep(0.02)
+    if session:
+        tmux("select-window", "-t", f"{session}:{window_id}")
+    return window_id
+
+
+def ensure():
+    with tabs_lock():
         ensure_locked()
     refresh()
 
@@ -687,18 +798,10 @@ def ensure_locked():
                 tmux("move-window", "-s", window_id, "-t", f"={GROUP}:")
     for group in windows_of(list_panes(f"={GROUP}")):
         bars = [pane for pane in group if is_sidebar(pane)]
-        window_id, window_width = group[0]["window_id"], int(group[0]["window_width"])
-        width = min(WIDTH, max(16, window_width // 4))
+        window_id = group[0]["window_id"]
+        width = sidebar_width(int(group[0]["window_width"]))
         if not bars:
-            # Mark the pane before the sidebar starts. remain-on-exit keeps a crashed
-            # sidebar on screen with its error instead of looping through respawns.
-            pane_id = tmux("split-window", "-fhbd", "-l", str(width), "-t", window_id,
-                           "-P", "-F", "#{pane_id}", "exec cat").strip()
-            if pane_id:
-                style_sidebar(pane_id)
-                tmux("set-option", "-p", "-t", pane_id, "@sidebar", "1", ";",
-                     "set-option", "-p", "-t", pane_id, "remain-on-exit", "on", ";",
-                     "respawn-pane", "-k", "-t", pane_id, sidebar_command())
+            add_sidebar(window_id, width)
             continue
         for extra in bars[1:]:
             tmux("kill-pane", "-t", extra["pane_id"])
@@ -772,6 +875,8 @@ def main(argv):
         refresh()
     elif command == "restart":
         restart()
+    elif command == "new-tab":
+        print(new_tab(argv[2] if len(argv) > 2 else None))
     elif command == "rename" and len(argv) > 2:
         rename(argv[2])
     elif command == "jump" and len(argv) > 2:

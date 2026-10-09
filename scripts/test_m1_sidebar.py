@@ -42,6 +42,14 @@ class TitleTests(unittest.TestCase):
         group = [pane(pane_title="✳ Something", window_name="Billing", **{"automatic-rename": "0"})]
         self.assertEqual(sidebar.tab_title(group, home="/Users/me"), "Billing")
 
+    def test_codex_running_as_node_is_an_agent_and_loses_its_folder_suffix(self):
+        group = [pane(pane_title="⠹ Resume Airbnb phone change | ops", pane_current_command="node",
+                      pane_current_path="/Users/me/projects/ops")]
+        screen = "• Working (30s • esc to interrupt)\n› Ask Codex to do anything\n  ? for shortcuts\n"
+        self.assertEqual(sidebar.kind_of(group[0], screen), "agent")
+        self.assertEqual(sidebar.kind_of(group[0], "Server listening on :3000\n"), "program")
+        self.assertEqual(sidebar.tab_title(group, home="/Users/me"), "Resume Airbnb phone change")
+
     def test_sidebar_pane_is_not_the_tab(self):
         group = [pane(**{"@sidebar": "1", "pane_title": "sidebar", "pane_active": "1"}),
                  pane(pane_title="✳ Real work", pane_active="0", pane_current_command="claude")]
@@ -71,6 +79,15 @@ class StatusTests(unittest.TestCase):
         # Looking at it marks it read; starting work again clears it too.
         self.assertFalse(sidebar.advance(state, "idle", True, 400.0)[2])
         self.assertFalse(sidebar.advance(state, "working", False, 400.0)[2])
+
+    def test_a_prompt_must_stay_up_before_the_tab_needs_you(self):
+        state = sidebar.advance(("idle", 100.0, False, 0.0), "asking", True, 200.0)
+        self.assertEqual(state[0], "idle")
+        state = sidebar.advance(state, "idle", True, 200.5)  # A menu that came and went.
+        self.assertEqual(state, ("idle", 100.0, False, 0.0))
+        state = sidebar.advance(state, "asking", True, 201.0)
+        state = sidebar.advance(state, "asking", True, 201.0 + sidebar.ASK_SETTLE)
+        self.assertEqual(state[:2], ("asking", 201.0 + sidebar.ASK_SETTLE))
 
     def test_finishing_in_view_is_not_unread(self):
         state = sidebar.advance(("working", 100.0, False, 150.0), "idle", True, 160.0)
@@ -141,6 +158,31 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Done · 5m ago", text)
         self.assertIn("Idle · 1h · ops", text)
 
+    def test_nothing_counts_seconds(self):
+        tabs = [tab("@1", 1, "a", kind="agent", state="working", since=80.0),
+                tab("@2", 2, "b", kind="agent", state="idle", unread=True, since=90.0),
+                tab("@3", 3, "c", kind="agent", state="idle", since=50.0)]
+        lines, _, _ = sidebar.render(tabs, "@3", 32, 30, 100.0)
+        text = [plain(line).strip(" ▌") for line in lines]
+        self.assertIn("Working", text)
+        self.assertIn("Done · just now", text)
+        self.assertIn("Idle", text)
+
+    def test_working_dot_pulses_one_cell_at_a_time(self):
+        tabs = [tab("@1", 1, "a", kind="agent", state="working", since=0.0), tab("@2", 2, "b")]
+        first, _, _ = sidebar.render(tabs, "@2", 32, 20, 10.0, frame=0)
+        second, _, _ = sidebar.render(tabs, "@2", 32, 20, 10.0, frame=2)
+        changed = [row for row, (a, b) in enumerate(zip(first, second)) if a != b]
+        self.assertEqual(changed, [1])
+        self.assertEqual(plain(first[1]), plain(second[1]))  # Same text; only the dot's color moves.
+
+    def test_frame_updates_rewrite_only_changed_rows_without_erasing_the_last_cell(self):
+        old = ["", "row one", "row two", ""]
+        new = ["", "row one", "row 2!!", "", ""]
+        self.assertEqual(sidebar.frame_updates(old, new), "\x1b[3;1Hrow 2!!\x1b[5;1H\x1b[2K")
+        self.assertEqual(sidebar.frame_updates(new, new), "")
+        self.assertNotIn("\x1b[K", sidebar.frame_updates([None] * 3, ["a", "", "b"]))
+
     def test_compact_when_tabs_do_not_fit(self):
         tabs = [tab(f"@{i}", i, f"tab {i}") for i in range(1, 9)]
         lines, rows, _ = sidebar.render(tabs, "@1", 32, 12, 0.0)
@@ -163,17 +205,19 @@ class TmuxServerTests(unittest.TestCase):
         self.terminals = []
 
     def tearDown(self):
-        # Stop the server first: a client exits with it, even with nobody reading its terminal.
-        self.tmux("kill-server")
-        for pid, fd in self.terminals:
+        # Hang up the test terminals first, then stop the server. A client exiting
+        # with output nobody reads can sit in the kernel draining its terminal, so
+        # reaping gives up after a while instead of waiting forever.
+        for _, fd in self.terminals:
             os.close(fd)
-            for _ in range(30):
+        self.tmux("kill-server")
+        for pid, _ in self.terminals:
+            for attempt in range(50):
                 if os.waitpid(pid, os.WNOHANG)[0]:
                     break
+                if attempt == 30:
+                    os.kill(pid, signal.SIGKILL)
                 time.sleep(0.1)
-            else:
-                os.kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
 
     def tmux(self, *args):
         return subprocess.run(["tmux", "-L", self.socket, *args], capture_output=True, text=True, env=self.env).stdout
@@ -236,6 +280,13 @@ class TmuxServerTests(unittest.TestCase):
         self.assertTrue(self.wait_for(lambda: len(self.shown_windows()) == 2))
         self.assertEqual(len(set(self.shown_windows())), 2)
         self.assertEqual(len(self.windows()), tabs + 1)
+
+    def test_new_tab_has_its_sidebar_before_it_is_shown(self):
+        with mock.patch.dict(os.environ, dict(self.env), clear=True):
+            window_id = sidebar.new_tab()
+        # Checked straight away: no hook or later ensure has had to add the sidebar.
+        panes = self.tmux("list-panes", "-t", window_id, "-F", "#{?#{@sidebar},S,M}").split()
+        self.assertEqual(sorted(panes), ["M", "S"])
 
     def test_snapshot_reads_agent_screens(self):
         pane_id = self.tmux("new-window", "-d", "-t", "=main:", "-P", "-F", "#{pane_id}",
