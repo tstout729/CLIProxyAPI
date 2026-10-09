@@ -123,3 +123,12 @@ References: [tmux persistence](https://github.com/tmux/tmux/wiki/Getting-Started
 ### Dashboard app
 
 `macos/CLIProxyDashboard/build.sh` builds `CLI Proxy.app` into `/Applications`. It opens the management dashboard in its own window. View > This Mac (⌘1) shows the local fallback proxy; View > M1 (⌘2) shows the main gateway through the tunnel. View > Copy Management Key (⌘K) copies the key for the dashboard shown, for its sign-in screen. Use the dashboard's OAuth page to sign accounts into a proxy; provider pages open in Safari. The Quota page shows each account's usage.
+
+## Remote-first with cmux (current setup, 2026-10-09)
+
+This supersedes the laptop-side routing above. The laptop is only the screen; every agent runs on the home host next to CLIProxyAPI (always-on host, Tailscale, mosh, tmux).
+
+- **Daily use:** open cmux NIGHTLY and press Cmd+N. The `m1-workspace` action in `~/.config/cmux/cmux.json` runs `cmux mosh-tmux home --session m1-<time>`, one tmux session per workspace. Type `claude`, `claude resume`, `claude --resume`, `codex` or `codex resume`. Typing echoes locally, drops and sleep reconnect, dragged files upload over cmux's SSH lane. Use Option+Enter for a newline (mosh does not pass Shift+Enter). `terminal.autoResumeAgentSessions` is false so cmux never relaunches agents on the laptop.
+- **Host launchers:** `scripts/home-shims/{claude,codex}` live in `~/.config/cliproxyapi-custom/shims/` and run `home-coding-session run`, which points the agent at the local proxy and keeps the key in the agent's environment only. `scripts/home-agent-shell.sh`, sourced from the host's `~/.zshrc`, puts the shims first in interactive shells; cmux's own `claude`/`codex` wrappers (sidebar status, notifications) resolve through PATH and reach them.
+- **Host shell and tmux:** `~/.zshenv` appends `/opt/homebrew/bin` so non-interactive SSH finds `mosh-server` and `tmux` (otherwise cmux falls back to SSH). `~/.tmux.conf` hides the status bar and enables full color, extended keys, OSC 52, passthrough, zero Escape delay and long history.
+- **Retired on the laptop:** the tunnel, proxy switch and fallback proxy LaunchAgents (plists in `~/Library/LaunchAgents.disabled-2026-10-09/`) and the `daily-proxy-shell.sh` sourcing. Backups: `~/.config/cliproxyapi-custom/backup-2026-10-09-remote-first/` on both Macs.

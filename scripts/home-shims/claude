@@ -1,0 +1,5 @@
+#!/bin/sh
+# Interactive claude on the home host: run through this machine's CLIProxyAPI
+# (shared account pool). cmux's own claude wrapper resolves to this file.
+[ "$#" -gt 0 ] && [ "$1" = resume ] && [ "claude" = claude ] && { shift; set -- --resume "$@"; }
+exec /opt/homebrew/bin/python3 "$HOME/.local/bin/home-coding-session" run claude -- "$@"
