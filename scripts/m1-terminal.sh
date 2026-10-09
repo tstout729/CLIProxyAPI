@@ -7,7 +7,9 @@
 PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 export LANG="${LANG:-en_US.UTF-8}"
-export MOSH_PREDICTION_DISPLAY=always
+# Local echo only when the link is slow (mosh's default): on a fast link, guessed
+# keystrokes that an agent's screen then redraws differently only flicker.
+export MOSH_PREDICTION_DISPLAY=adaptive
 # Window titles are the tab's own title, without mosh's "[mosh]" prefix.
 export MOSH_TITLE_NOPREFIX=1
 # mosh checks the terminal type locally; use a standard one if this Mac lacks its description.

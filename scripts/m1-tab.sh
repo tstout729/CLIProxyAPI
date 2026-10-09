@@ -22,7 +22,8 @@ M1_TABS_SOCKET="$socket" "$python" -I "$sidebar" ensure
 
 view="w-$(date +%m%d-%H%M%S)-$$"
 if tm list-sessions -F '#{session_group} #{session_attached}' | grep -q '^main [1-9]'; then
-  exec tmux -L "$socket" new-session -t main -s "$view" \; set destroy-unattached on \; new-window -c "$HOME"
+  tab=$(M1_TABS_SOCKET="$socket" "$python" -I "$sidebar" new-tab)
+  [ -n "$tab" ] && exec tmux -L "$socket" new-session -t main -s "$view" \; set destroy-unattached on \; select-window -t "=$view:$tab"
 fi
 last=$(tm show -gqv @m1_last_tab)
 if [ -n "$last" ] && tm list-windows -t =main -F '#{window_id}' | grep -qx "$last"; then
