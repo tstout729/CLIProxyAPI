@@ -1,0 +1,33 @@
+#!/bin/sh
+# pbcopy on the home host that also reaches the clipboard of the Mac you are
+# typing on. Agents run here while you type on the laptop through Ghostty,
+# mosh and tmux, and they copy without a terminal of their own, so tmux sends
+# the text to your terminal as a clipboard escape (OSC 52; m1-tabs.tmux.conf
+# makes it a form mosh passes on). The terminal you typed in most recently
+# gets it, on the tabs server or the tmux server this runs in. This Mac's own
+# clipboard gets it too.
+local_pbcopy="${M1_PBCOPY:-/usr/bin/pbcopy}"
+tmux="$(command -v tmux || echo /opt/homebrew/bin/tmux)"
+tmp="$(mktemp "${TMPDIR:-/tmp}/pbcopy.XXXXXX")" || exec "$local_pbcopy" "$@"
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp"
+"$local_pbcopy" "$@" < "$tmp"
+status=$?
+
+# Only the general clipboard travels; -pboard find/font/ruler stay on this Mac.
+[ "${1:-}" = -pboard ] && [ "${2:-}" != general ] && exit "$status"
+
+# "<activity> <server flag> <server> <client>" for every client on the candidate servers.
+clients() {
+  "$tmux" -L "${M1_TABS_SOCKET:-tabs}" list-clients -F "#{client_activity} -L ${M1_TABS_SOCKET:-tabs} #{client_name}" 2>/dev/null
+  if [ -n "${TMUX:-}" ]; then
+    socket="${TMUX%%,*}"
+    "$tmux" -S "$socket" list-clients -F "#{client_activity} -S $socket #{client_name}" 2>/dev/null
+  fi
+}
+latest="$(clients | sort -rn | head -n 1)"
+if [ -n "$latest" ]; then
+  set -- $latest
+  "$tmux" "$2" "$3" load-buffer -w -b clipboard -t "$4" - < "$tmp" 2>/dev/null
+fi
+exit "$status"
