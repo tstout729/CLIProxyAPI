@@ -133,10 +133,22 @@ This supersedes the laptop-side routing above. The laptop is only the screen; ev
 - **Host shell and tmux:** `~/.zshenv` appends `/opt/homebrew/bin` so non-interactive SSH finds `mosh-server` and `tmux` (otherwise cmux falls back to SSH). `~/.tmux.conf` hides the status bar and enables full color, extended keys, OSC 52, passthrough, zero Escape delay and long history.
 - **Retired on the laptop:** the tunnel, proxy switch and fallback proxy LaunchAgents (plists in `~/Library/LaunchAgents.disabled-2026-10-09/`) and the `daily-proxy-shell.sh` sourcing. Backups: `~/.config/cliproxyapi-custom/backup-2026-10-09-remote-first/` on both Macs.
 
-## Ghostty tabs on the home host (current setup, replaces the cmux workflow, 2026-10-09)
+## Ghostty with a tab sidebar on the home host (current setup, 2026-10-09)
 
-Open Ghostty and type `claude` or `codex`. Every Ghostty window and tab runs on the home host; nothing agent-related runs on the laptop.
+Open Ghostty. Each window lists your tabs down its left side, like cmux. Press Cmd+N for a new tab, click a tab to show it, and type `claude` or `codex`. Every tab runs on the home host; nothing agent-related runs on the laptop.
 
-- **Laptop:** Ghostty's app-specific config (`~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`, not read by cmux) sets `command = ~/.local/bin/m1` (`scripts/m1-terminal.sh`), `window-save-state = always`, and `keybind = shift+enter=text:\x1b\r` (mosh does not pass Shift+Enter; Meta+Enter is a newline in Claude). The command connects with mosh (`MOSH_PREDICTION_DISPLAY=always` for instant typing). If the host is unreachable the tab becomes a local shell and says so.
-- **Host:** `~/.local/bin/m1-tab` (`scripts/m1-tab.sh`) gives each tab its own session on a dedicated tmux server (`tmux -L tabs`, started without inherited `ZDOTDIR`). A new tab reattaches the oldest unattached `t-*` session, so a relaunched terminal gets its sessions back; otherwise it starts a new one. `home-agent-shell.sh` always moves the proxy launchers to the front of PATH, since an inherited PATH can hold them behind `~/.local/bin`.
-- Exiting the shell ends the session and closes the tab. Closing a tab or losing the network leaves the session running.
+| Keys | Action |
+| --- | --- |
+| Cmd+N or Cmd+T | New tab (starts in the home folder) |
+| Cmd+W | Close tab (asks first if something other than a shell is running) |
+| Cmd+1 to Cmd+8, Cmd+9 | Show that tab; Cmd+9 is the last tab |
+| Cmd+Shift+] / Cmd+Shift+[ , Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| Right-click a tab | Rename, move up or down, close |
+| Cmd+Shift+N / Cmd+Shift+W | Another window on the same tabs / close the window (tabs keep running) |
+
+- **Laptop:** Ghostty's app-specific config (`~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`, not read by cmux) is a copy of `scripts/m1-ghostty.config`. It sets `command = ~/.local/bin/m1` (`scripts/m1-terminal.sh`, mosh with `MOSH_PREDICTION_DISPLAY=always`; a local shell if the host is unreachable), `window-save-state = always`, Shift+Enter as Meta+Enter (mosh does not pass Shift+Enter), and the tab keys above. The keys send the tabs server's prefix, Ctrl+B, plus a key; Ghostty's own tabs are not used. Reload the config with Cmd+Shift+Comma.
+- **Host:** `~/.local/bin/m1-tab` (`scripts/m1-tab.sh`) uses a dedicated tmux server (`tmux -L tabs`, started without inherited `ZDOTDIR`). Tabs are the windows of the session group `main`. Each terminal window attaches its own grouped session (`w-*`, removed when the window closes), so two windows can show different tabs; a new window opens on the tab last shown. On every connection it sources `~/.config/m1-tabs/tmux.conf` (`scripts/m1-tabs.tmux.conf`: keys, mouse and hooks) and runs `m1-sidebar ensure`.
+- **Sidebar:** `~/.local/bin/m1-sidebar` (`scripts/m1-sidebar.py`) runs in a 28-column pane on the left of every tab. It shows each tab's title (an agent's own title, a name you gave it, or the shell's folder), its folder, and a dot when a background tab rang the bell. Hooks keep a sidebar in every tab, at the right width, and redraw them. A sidebar left alone closes its tab, so exiting the shell or agent closes the tab. Clicks reach the sidebar without moving keyboard focus to it. A crashed sidebar stays on screen with its error (`remain-on-exit`) instead of respawning in a loop; the next `ensure` restarts it.
+- **Old layout:** sessions from the earlier one-session-per-tab layout (`t-*`) join the tab list, still running, as soon as no window shows them.
+- `home-agent-shell.sh` always moves the proxy launchers to the front of PATH, since an inherited PATH can hold them behind `~/.local/bin`.
+- Tests: `/opt/homebrew/bin/python3 -m unittest scripts/test_m1_sidebar.py` (run outside tmux, or with `TMUX` unset; it starts a private tmux server).
