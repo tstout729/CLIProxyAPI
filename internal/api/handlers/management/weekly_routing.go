@@ -16,5 +16,5 @@ func (h *Handler) GetWeeklyRoutingStatus(c *gin.Context) {
 	strategy := h.cfg.Routing.Strategy
 	h.mu.Unlock()
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"strategy": strategy, "accounts": h.authManager.WeeklyQuotaStatus()})
+	c.JSON(http.StatusOK, gin.H{"strategy": strategy, "weekly_reserve_percent": h.authManager.WeeklyReservePercent(), "accounts": h.authManager.WeeklyQuotaStatus()})
 }

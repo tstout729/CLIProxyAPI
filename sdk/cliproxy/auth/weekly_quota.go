@@ -2,11 +2,13 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,15 +78,24 @@ func weeklyBucketApplies(scope, model string) bool {
 	}
 }
 
-// rank returns an upcoming weekly reset and whether observed capacity blocks
-// the model. Passed resets become unknown until a new upstream observation;
-// crossing a reset never invents a replenished balance.
-func (c *WeeklyQuotaCache) rank(auth *Auth, model string, now time.Time) (time.Time, bool) {
+// weeklyCapacity summarizes current observed capacity for one model. The zero
+// value means unknown: no observation, a stale one, or a passed reset.
+type weeklyCapacity struct {
+	reset     time.Time // earliest upcoming weekly reset
+	weekly    bool      // at least one current weekly bucket applies
+	remaining float64   // lowest applicable weekly RemainingPercent (0-100)
+	exhausted bool
+}
+
+// capacity reports the applicable buckets for model. Passed resets become
+// unknown until a new upstream observation; crossing a reset never invents a
+// replenished balance.
+func (c *WeeklyQuotaCache) capacity(auth *Auth, model string, now time.Time) weeklyCapacity {
 	o, ok := c.observation(auth)
 	if !ok || now.Sub(o.ObservedAt) >= weeklyQuotaStaleTTL {
-		return time.Time{}, false
+		return weeklyCapacity{}
 	}
-	var reset time.Time
+	var result weeklyCapacity
 	unknownAfterReset := false
 	for _, bucket := range o.Buckets {
 		if !weeklyBucketApplies(bucket.Scope, model) {
@@ -95,23 +106,90 @@ func (c *WeeklyQuotaCache) rank(auth *Auth, model string, now time.Time) (time.T
 			continue
 		}
 		if bucket.RemainingPercent <= 0 {
-			return time.Time{}, true
+			return weeklyCapacity{exhausted: true}
 		}
-		if bucket.Window == "weekly" && bucket.ResetAt != nil && (reset.IsZero() || bucket.ResetAt.Before(reset)) {
-			reset = *bucket.ResetAt
+		if bucket.Window != "weekly" {
+			continue
+		}
+		if !result.weekly || bucket.RemainingPercent < result.remaining {
+			result.remaining = bucket.RemainingPercent
+		}
+		result.weekly = true
+		if bucket.ResetAt != nil && (result.reset.IsZero() || bucket.ResetAt.Before(result.reset)) {
+			result.reset = *bucket.ResetAt
 		}
 	}
 	if unknownAfterReset {
-		return time.Time{}, false
+		return weeklyCapacity{}
 	}
-	return reset, false
+	return result
+}
+
+// rank returns an upcoming weekly reset and whether observed capacity blocks
+// the model.
+func (c *WeeklyQuotaCache) rank(auth *Auth, model string, now time.Time) (time.Time, bool) {
+	capacity := c.capacity(auth, model, now)
+	return capacity.reset, capacity.exhausted
+}
+
+// AttributeWeeklyReservePercent is the per-account reserve override: a top-level
+// number in the auth JSON (metadata) or a string attribute, on the 0-100 scale.
+const AttributeWeeklyReservePercent = "weekly_reserve_percent"
+
+// NormalizeWeeklyReservePercent clamps a reserve to the 0-100 percent scale of
+// WeeklyQuotaBucket.RemainingPercent (100 = the whole week left; not a 0-1
+// fraction). Non-finite or non-positive values disable the reserve.
+func NormalizeWeeklyReservePercent(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return 0
+	}
+	return math.Min(value, 100)
+}
+
+// authWeeklyReservePercent reads a valid per-account override (0-100).
+func authWeeklyReservePercent(auth *Auth) (float64, bool) {
+	if auth == nil {
+		return 0, false
+	}
+	raw := auth.Metadata[AttributeWeeklyReservePercent]
+	if attribute := strings.TrimSpace(auth.Attributes[AttributeWeeklyReservePercent]); attribute != "" {
+		raw = attribute
+	}
+	var value float64
+	switch v := raw.(type) {
+	case float64:
+		value = v
+	case int:
+		value = float64(v)
+	case json.Number:
+		parsed, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		value = parsed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		value = parsed
+	default:
+		return 0, false
+	}
+	if math.IsNaN(value) || value < 0 || value > 100 {
+		return 0, false
+	}
+	return value, true
 }
 
 // WeeklyResetFirstSelector uses the earliest upcoming weekly reset within the
 // highest available manual-priority tier. Unknown capacity is eligible fallback.
 type WeeklyResetFirstSelector struct {
-	Cache        *WeeklyQuotaCache
-	modelForAuth func(*Auth, string) string
+	Cache *WeeklyQuotaCache
+	// ReservePercent is the default weekly reserve on the 0-100 scale of
+	// WeeklyQuotaBucket.RemainingPercent. 0 disables the reserve.
+	ReservePercent float64
+	modelForAuth   func(*Auth, string) string
 }
 
 func (s *WeeklyResetFirstSelector) selectionModel(auth *Auth, model string) string {
@@ -121,17 +199,76 @@ func (s *WeeklyResetFirstSelector) selectionModel(auth *Auth, model string) stri
 	return model
 }
 
+// reserveFor returns the account's effective reserve: its own override when
+// valid, otherwise the selector default.
+func (s *WeeklyResetFirstSelector) reserveFor(auth *Auth) float64 {
+	if override, ok := authWeeklyReservePercent(auth); ok {
+		return override
+	}
+	return NormalizeWeeklyReservePercent(s.ReservePercent)
+}
+
+// reserved reports whether known current weekly capacity is at or below the
+// account's reserve. Unknown, stale, and exhausted capacity is never reserved.
+func (s *WeeklyResetFirstSelector) reserved(auth *Auth, capacity weeklyCapacity) bool {
+	if !capacity.weekly || capacity.exhausted {
+		return false
+	}
+	reserve := s.reserveFor(auth)
+	return reserve > 0 && capacity.remaining <= reserve
+}
+
+// filter removes accounts whose observed capacity for the model is exhausted.
+// It then removes reserved accounts, but only while another remaining account
+// is both unreserved and currently available; otherwise reserved accounts stay
+// and normal ranking decides, so the reserve never causes a failed request.
+// Unknown capacity is unreserved. Like exhaustion, this runs before priority
+// tiers and session-affinity reuse, so a reserved bound thread rebinds.
 func (s *WeeklyResetFirstSelector) filter(auths []*Auth, model string, now time.Time) []*Auth {
 	eligible := make([]*Auth, 0, len(auths))
+	models := make([]string, 0, len(auths))
+	reserved := make([]bool, 0, len(auths))
+	reservedCount := 0
 	for _, auth := range auths {
 		if auth == nil {
 			continue
 		}
-		if _, exhausted := s.Cache.rank(auth, s.selectionModel(auth, model), now); !exhausted {
-			eligible = append(eligible, auth)
+		checkModel := s.selectionModel(auth, model)
+		capacity := s.Cache.capacity(auth, checkModel, now)
+		if capacity.exhausted {
+			continue
+		}
+		isReserved := s.reserved(auth, capacity)
+		if isReserved {
+			reservedCount++
+		}
+		eligible = append(eligible, auth)
+		models = append(models, checkModel)
+		reserved = append(reserved, isReserved)
+	}
+	if reservedCount == 0 || reservedCount == len(eligible) {
+		return eligible
+	}
+	openUnreserved := false
+	for i, auth := range eligible {
+		if reserved[i] {
+			continue
+		}
+		if blocked, _, _ := isAuthBlockedForModel(auth, models[i], now); !blocked {
+			openUnreserved = true
+			break
 		}
 	}
-	return eligible
+	if !openUnreserved {
+		return eligible
+	}
+	unreserved := make([]*Auth, 0, len(eligible)-reservedCount)
+	for i, auth := range eligible {
+		if !reserved[i] {
+			unreserved = append(unreserved, auth)
+		}
+	}
+	return unreserved
 }
 
 func (s *WeeklyResetFirstSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
@@ -495,13 +632,19 @@ func parseWeeklyQuota(provider string, body []byte, observedAt time.Time) ([]Wee
 // WeeklyQuotaAccountStatus is a safe management view with no filenames, emails,
 // raw auth IDs, access tokens, or provider response bodies.
 type WeeklyQuotaAccountStatus struct {
-	AuthIndex        string              `json:"auth_index"`
-	Provider         string              `json:"provider"`
-	Status           string              `json:"status"`
-	WeeklyResetAt    *time.Time          `json:"weekly_reset_at,omitempty"`
-	RemainingPercent *float64            `json:"remaining_percent,omitempty"`
-	ObservedAt       *time.Time          `json:"observed_at,omitempty"`
-	Buckets          []WeeklyQuotaBucket `json:"buckets"`
+	AuthIndex        string     `json:"auth_index"`
+	Provider         string     `json:"provider"`
+	Status           string     `json:"status"`
+	WeeklyResetAt    *time.Time `json:"weekly_reset_at,omitempty"`
+	RemainingPercent *float64   `json:"remaining_percent,omitempty"`
+	// ReservePercent is the account's effective weekly reserve (0-100).
+	ReservePercent float64 `json:"reserve_percent"`
+	// Reserved reports account-wide weekly capacity at or below the reserve. Such
+	// accounts are skipped while another available account is unreserved.
+	// Model-scoped weekly buckets can also reserve an account for those models.
+	Reserved   bool                `json:"reserved"`
+	ObservedAt *time.Time          `json:"observed_at,omitempty"`
+	Buckets    []WeeklyQuotaBucket `json:"buckets"`
 }
 
 var weeklyQuotaPacific, _ = time.LoadLocation("America/Los_Angeles")
@@ -516,7 +659,20 @@ func weeklyPacificTime(t time.Time) *time.Time {
 	return &t
 }
 
+// WeeklyReservePercent reports the active weekly-reset-first default reserve
+// (0-100), or 0 when another strategy is active.
+func (m *Manager) WeeklyReservePercent() float64 {
+	if m == nil {
+		return 0
+	}
+	if s := weeklySelector(m.Selector()); s != nil {
+		return NormalizeWeeklyReservePercent(s.ReservePercent)
+	}
+	return 0
+}
+
 func (m *Manager) WeeklyQuotaStatus() []WeeklyQuotaAccountStatus {
+	weekly := weeklySelector(m.Selector())
 	auths := m.List()
 	result := make([]WeeklyQuotaAccountStatus, 0)
 	now := m.weeklyQuota.nowFunc()
@@ -525,6 +681,9 @@ func (m *Manager) WeeklyQuotaStatus() []WeeklyQuotaAccountStatus {
 			continue
 		}
 		row := WeeklyQuotaAccountStatus{AuthIndex: auth.EnsureIndex(), Provider: auth.Provider, Status: "unknown", Buckets: make([]WeeklyQuotaBucket, 0)}
+		if weekly != nil {
+			row.ReservePercent = weekly.reserveFor(auth)
+		}
 		if observation, ok := m.weeklyQuota.observation(auth); ok {
 			row.ObservedAt = weeklyPacificTime(observation.ObservedAt)
 			row.Buckets = make([]WeeklyQuotaBucket, len(observation.Buckets))
@@ -539,13 +698,15 @@ func (m *Manager) WeeklyQuotaStatus() []WeeklyQuotaAccountStatus {
 					row.WeeklyResetAt = row.Buckets[i].ResetAt
 				}
 			}
+			capacity := m.weeklyQuota.capacity(auth, "", now)
 			if now.Sub(observation.ObservedAt) >= weeklyQuotaStaleTTL {
 				row.Status = "stale"
-			} else if _, blocked := m.weeklyQuota.rank(auth, "", now); blocked {
+			} else if capacity.exhausted {
 				row.Status = "exhausted"
-			} else if reset, _ := m.weeklyQuota.rank(auth, "", now); !reset.IsZero() {
+			} else if !capacity.reset.IsZero() {
 				row.Status = "ready"
 			}
+			row.Reserved = weekly != nil && weekly.reserved(auth, capacity)
 		}
 		if auth.Disabled {
 			row.Status = "disabled"

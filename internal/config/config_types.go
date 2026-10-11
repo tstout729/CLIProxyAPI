@@ -357,6 +357,16 @@ type RoutingConfig struct {
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first", "weekly-reset-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
+	// WeeklyReservePercent keeps part of each Claude/Codex account's weekly limit for use
+	// outside the proxy when Strategy is "weekly-reset-first". It is a percentage on the
+	// provider's 0-100 scale (15 = 15% of the week left), not a 0-1 fraction. An account
+	// whose applicable weekly balance is at or below it is skipped while another available
+	// account is above its own reserve; when none is, normal weekly ranking applies, so the
+	// reserve never fails a request. Unknown or stale balances are never reserved, and
+	// exhausted (0%) accounts stay excluded. A top-level "weekly_reserve_percent" number in
+	// an auth JSON file overrides it for that account. Default 0 disables the reserve.
+	WeeklyReservePercent float64 `yaml:"weekly-reserve-percent,omitempty" json:"weekly-reserve-percent,omitempty"`
+
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
 	// followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,

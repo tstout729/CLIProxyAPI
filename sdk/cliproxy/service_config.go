@@ -26,6 +26,7 @@ type configCommit struct {
 
 type routingRuntimeState struct {
 	strategy                 string
+	weeklyReservePercent     float64
 	sessionAffinity          bool
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
@@ -48,6 +49,12 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "fill-first"
 	case "weekly-reset-first":
 		state.strategy = "weekly-reset-first"
+		// Percent on the 0-100 scale of observed weekly balances; only this strategy uses it.
+		raw := cfg.Routing.WeeklyReservePercent
+		state.weeklyReservePercent = coreauth.NormalizeWeeklyReservePercent(raw)
+		if raw != 0 && raw != state.weeklyReservePercent {
+			log.Warnf("routing.weekly-reserve-percent %v is outside 0-100; using %v", raw, state.weeklyReservePercent)
+		}
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -72,7 +79,7 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
 	case "weekly-reset-first":
-		selector = &coreauth.WeeklyResetFirstSelector{}
+		selector = &coreauth.WeeklyResetFirstSelector{ReservePercent: state.weeklyReservePercent}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}

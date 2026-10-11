@@ -22,3 +22,24 @@ Codex OAuth generation uses upstream WebSockets by default for HTTP, SSE, and We
 Thread bindings, quota observations, and sockets are in memory and are rebuilt after restarting the service. Bindings use a sliding TTL. Explicit session headers, `prompt_cache_key`, and existing client/session identity detection are retained. This preserves the account and identity needed for provider prompt caching; the provider controls cache eligibility, retention, and hit rates.
 
 `GET /v8/management/routing/weekly-status` is protected by the existing management authentication. It reports the active strategy and safe account indexes, statuses, observed balances, capacity buckets, and reset/observation timestamps in Pacific time. It excludes raw auth IDs, filenames, emails, tokens, account IDs, and provider response bodies. Historical balances can appear in a stale status; the selector does not use stale dates for ranking.
+
+## Weekly reserve
+
+Weekly-reset-first drains the account whose week ends first. To keep part of an account's week for work outside the proxy, such as a scheduled job on the same subscription, set a reserve:
+
+```yaml
+routing:
+  strategy: weekly-reset-first
+  weekly-reserve-percent: 15
+```
+
+The value is a percentage of the weekly limit on the providers' 0-100 scale (`15` means 15% of the week left), not a 0-1 fraction. Default `0` disables the reserve.
+
+- An account whose applicable weekly balance is at or below its reserve is skipped while another available account is above its own reserve.
+- If every available account is at or below its reserve, normal ranking applies, so the reserve never fails a request. A request retry that has already tried the other accounts can also use a reserved account.
+- Exhausted accounts (0%) stay excluded. Unknown or stale balances are never reserved; such an account is used before a reserved one but still ranks after known balances.
+- Only weekly windows count; five-hour windows do not. A model-scoped weekly window (a Claude family such as Opus, or a Codex additional model limit) reserves the account only for matching models.
+- Like exhaustion, the reserve applies before manual priority and before thread affinity. A thread bound to an account that reaches its reserve moves to an unreserved account on its next request.
+- For one account, add a top-level number to its auth JSON, next to `priority`: `"weekly_reserve_percent": 30`. It overrides the global value; `0` exempts that account. Invalid values (outside 0-100 or not a number) are ignored.
+
+The global value hot-reloads with the config file. Changing it rebuilds the routing selector, which clears in-memory thread bindings, as any routing change does. `GET /v8/management/routing/weekly-status` reports `weekly_reserve_percent` and, per account, `reserve_percent` and `reserved` (account-wide weekly window at or below the reserve).

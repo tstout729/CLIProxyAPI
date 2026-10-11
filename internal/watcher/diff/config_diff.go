@@ -185,6 +185,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.Routing.Strategy != newCfg.Routing.Strategy {
 		changes = append(changes, fmt.Sprintf("routing.strategy: %s -> %s", oldCfg.Routing.Strategy, newCfg.Routing.Strategy))
 	}
+	if oldCfg.Routing.WeeklyReservePercent != newCfg.Routing.WeeklyReservePercent {
+		changes = append(changes, fmt.Sprintf("routing.weekly-reserve-percent: %v -> %v", oldCfg.Routing.WeeklyReservePercent, newCfg.Routing.WeeklyReservePercent))
+	}
 	if !reflect.DeepEqual(oldCfg.Payload, newCfg.Payload) {
 		changes = appendPayloadConfigChanges(changes, oldCfg.Payload, newCfg.Payload)
 	}
