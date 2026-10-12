@@ -35,6 +35,14 @@ draft and Adobe Creative Cloud cleanup. Installation on this Mac is authorized.
 - LaunchAgent installed. Installed source hash matched tested source; periodic
   state records prove successful checks. Busy-host ps/lsof timeouts skip cleanup
   safely. Latest loaded-job readback: 18 runs, last exit code 0, 300-second interval.
-- Remaining: latest-source installation, commit/push/integrate, canonical record.
+- Final source installed and LaunchAgent reloaded: last exit code 0, 300-second
+  interval. The installed script matches the final source.
+- Feature commit `fbcf5d2f` is pushed. Serial integration includes the newer
+  Codex interruption fix (`03bb00a7`) without changing the running proxy.
+- Combined integration checks passed: 24 cleanup tests (six live listeners) and
+  `go build -o /private/tmp/cliproxy-dev-reaper-integrated-verify ./cmd/server`.
+- Automatic cleanup acceptance criteria are satisfied. Full Adobe removal is
+  still blocked by administrator authentication; the native uninstaller is the
+  concrete final step. No applications or databases were removed by the reaper.
 - Prepared 59-second silent guide. Automatic approval review blocked sending
   the narration to ElevenLabs; narration waits for explicit permission.
