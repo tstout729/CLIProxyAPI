@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -237,10 +238,56 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	if optimizeMultiAgentV2 || multiAgentV2Conflict {
 		sess.setMultiAgentV2Optimized(conn, optimizeMultiAgentV2 && !multiAgentV2Conflict)
 	}
-
 	if input := cliproxyexecutor.WebsocketInputFromContext(ctx); input != nil && e.cfg != nil && (e.cfg.Codex.ResponseSteering || e.cfg.CodexResponseSteering) {
 		return e.streamCodexDuplex(ctx, auth, req, opts, sess, conn, readCh, input, prepared, reporter, upstreamHeaders, unlockStreamSession), nil
 	}
+	var interruptMu sync.Mutex
+	interruptResponseID := ""
+	interruptRetired := false
+	releaseInterrupt := func(bool) {}
+	if interrupt := cliproxyexecutor.WebsocketInterruptFromContext(ctx); interrupt != nil {
+		releaseInterrupt = interrupt.Register(func(payload []byte) error {
+			interruptMu.Lock()
+			defer interruptMu.Unlock()
+			if interruptRetired || ctx.Err() != nil || interruptResponseID == "" ||
+				gjson.GetBytes(payload, "response_id").String() != interruptResponseID {
+				return nil
+			}
+			active, _ := sess.activeForConn(conn)
+			if active != readCh {
+				return nil
+			}
+			if !cliproxyexecutor.WebsocketAuthEnabled(ctx, auth.ID) {
+				return fmt.Errorf("websocket credential is no longer enabled")
+			}
+			helps.RecordAPIWebsocketRequest(ctx, e.cfg, helps.UpstreamRequestLog{
+				URL: wsURL, Method: "WEBSOCKET", Body: payload, Provider: e.Identifier(), AuthID: auth.ID,
+			})
+			if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
+				return mapCodexWebsocketWriteError(sess, conn, errWrite)
+			}
+			return nil
+		})
+	}
+	retireInterrupt := func(terminal bool) {
+		interruptMu.Lock()
+		interruptRetired = true
+		interruptMu.Unlock()
+		releaseInterrupt(terminal)
+	}
+	observeInterruptResponse := func(payload []byte) {
+		if gjson.GetBytes(payload, "type").String() == "response.created" {
+			interruptMu.Lock()
+			interruptResponseID = gjson.GetBytes(payload, "response.id").String()
+			interruptMu.Unlock()
+		}
+	}
+	interruptOwnedByStream := false
+	defer func() {
+		if !interruptOwnedByStream {
+			retireInterrupt(false)
+		}
+	}()
 
 	buffering := e.cfg != nil && e.cfg.Codex.StreamBootstrapBuffering
 	var bootstrapTimeout time.Duration
@@ -424,6 +471,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			}
 
 			eventType := gjson.GetBytes(payload, "type").String()
+			observeInterruptResponse(payload)
 			isTerminalEvent := eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" || eventType == "response.failed" || eventType == "error"
 			if helps.HasMeaningfulCodexOutputDelta(payload) {
 				sawOutputDelta = true
@@ -447,8 +495,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			}
 			completedPayload := payload
 			if eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" {
+				retireInterrupt(true)
 				completedPayload = normalizeCodexWebsocketCompletion(completedPayload)
-				if !preserveNativeOutput {
+				if !preserveNativeOutput && !helps.IsCodexInterruptedResponse(completedPayload) {
 					completedPayload = patchCodexCompletedOutput(completedPayload, outputItemsByIndex, outputItemsFallback)
 				}
 				if eventType != "response.incomplete" {
@@ -539,7 +588,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return &cliproxyexecutor.StreamResult{Headers: upstreamHeaders, Chunks: out}, nil
 	}
 
+	interruptOwnedByStream = true
 	go func() {
+		defer retireInterrupt(false)
 		terminateReason := "completed"
 		var terminateErr error
 
@@ -659,6 +710,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			}
 
 			eventType := gjson.GetBytes(payload, "type").String()
+			observeInterruptResponse(payload)
 			isTerminalEvent := eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" || eventType == "response.failed" || eventType == "error"
 			if helps.HasMeaningfulCodexOutputDelta(payload) {
 				sawOutputDelta = true
@@ -681,8 +733,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			}
 			completedPayload := payload
 			if eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" {
+				retireInterrupt(true)
 				completedPayload = normalizeCodexWebsocketCompletion(completedPayload)
-				if !preserveNativeOutput {
+				if !preserveNativeOutput && !helps.IsCodexInterruptedResponse(completedPayload) {
 					completedPayload = patchCodexCompletedOutput(completedPayload, outputItemsByIndex, outputItemsFallback)
 				}
 				if eventType != "response.incomplete" {
