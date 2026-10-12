@@ -54,6 +54,35 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 	acceptedSteers := make(map[string]string)
 	current := initial
 	responseID := ""
+	responseActive := false
+	forwardInterrupt := func(payload []byte) error {
+		// Serialize against terminal observation so late controls cannot affect
+		// the successor, while preserving the exact socket and account.
+		metadataMu.Lock()
+		defer metadataMu.Unlock()
+		if streamCtx.Err() != nil || !responseActive || responseID == "" ||
+			gjson.GetBytes(payload, "response_id").String() != responseID {
+			return nil
+		}
+		active, _ := sess.activeForConn(conn)
+		if active != readCh {
+			return nil
+		}
+		if !cliproxyexecutor.WebsocketAuthEnabled(streamCtx, auth.ID) {
+			return fmt.Errorf("websocket credential is no longer enabled")
+		}
+		helps.RecordAPIWebsocketRequest(streamCtx, e.cfg, helps.UpstreamRequestLog{
+			URL: initial.wsURL, Method: "WEBSOCKET", Body: payload, Provider: e.Identifier(), AuthID: auth.ID,
+		})
+		if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
+			return mapCodexWebsocketWriteError(sess, conn, errWrite)
+		}
+		return nil
+	}
+	releaseInterrupt := func(bool) {}
+	if interrupt := cliproxyexecutor.WebsocketInterruptFromContext(ctx); interrupt != nil {
+		releaseInterrupt = interrupt.Register(forwardInterrupt)
+	}
 	responseSettings := make(map[string]*codexWebsocketPrepared)
 	steeringSettings := make(map[string]*codexWebsocketPrepared)
 	var responseOrder []string
@@ -276,6 +305,14 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 					continue
 				}
 				switch gjson.GetBytes(payload, "type").String() {
+				case "response.interrupt":
+					// Interrupts have no steering acknowledgement or successor settings.
+					if errInterrupt := forwardInterrupt(payload); errInterrupt != nil {
+						fail(errInterrupt)
+						return
+					}
+					continue
+
 				case "response.steer":
 					parent := gjson.GetBytes(payload, "previous_response_id").String()
 					metadataMu.Lock()
@@ -338,6 +375,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 		defer close(out)
 		defer func() {
 			cancel()
+			releaseInterrupt(false)
 			// Close releases a writer blocked in the network, then join it before
 			// releasing the execution session. No goroutine outlives its socket.
 			e.invalidateUpstreamConnWithoutDisconnectNotify(sess, conn, "duplex_closed", nil)
@@ -355,7 +393,6 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 		}
 		reporter := initialReporter
 		firstResponse := true
-		responseActive := false
 		outputItems := make(map[int64][]byte)
 		var outputFallback [][]byte
 		for {
@@ -410,6 +447,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 					current, pending = pending[0], pending[1:]
 				}
 				responseID = gjson.GetBytes(payload, "response.id").String()
+				responseActive = true
 				// Retain response settings, not request history or authorization headers.
 				// In-flight steering pins its parent's settings independently of this window.
 				snapshot := *current
@@ -436,7 +474,6 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 					reporter.StartResponseTTFT()
 				}
 				firstResponse = false
-				responseActive = true
 				outputItems = make(map[int64][]byte)
 				outputFallback = nil
 			}
@@ -567,13 +604,13 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 				collectCodexOutputItemDone(payload, outputItems, &outputFallback)
 			}
 			if eventType == "response.completed" || eventType == "response.done" || eventType == "response.incomplete" {
-				responseActive = false
 				metadataMu.Lock()
+				responseActive = false
 				automaticActive = false
 				metadataMu.Unlock()
 				wakeWriter()
 				payload = normalizeCodexWebsocketCompletion(payload)
-				if !current.preserveNativeOutput {
+				if !current.preserveNativeOutput && !helps.IsCodexInterruptedResponse(payload) {
 					payload = patchCodexCompletedOutput(payload, outputItems, outputFallback)
 				}
 				if eventType != "response.incomplete" {

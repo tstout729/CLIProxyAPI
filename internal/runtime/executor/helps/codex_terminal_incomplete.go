@@ -35,6 +35,10 @@ func IsCodexTerminalEmptyIncomplete(eventData []byte, outputItemsCount int, sawO
 	if eventType != "response.incomplete" {
 		return false
 	}
+	if IsCodexInterruptedResponse(eventData) {
+		// An intentional interruption can discard every partial item and token.
+		return false
+	}
 	// If any non-empty text delta, reasoning delta, or tool argument delta was emitted, content was produced.
 	if sawOutputDelta {
 		return false
@@ -57,4 +61,10 @@ func IsCodexTerminalEmptyIncomplete(eventData []byte, outputItemsCount int, sawO
 		return false
 	}
 	return true
+}
+
+// IsCodexInterruptedResponse identifies a successful native interruption.
+func IsCodexInterruptedResponse(payload []byte) bool {
+	return gjson.GetBytes(payload, "type").String() == "response.incomplete" &&
+		gjson.GetBytes(payload, "response.incomplete_details.reason").String() == "interrupted"
 }

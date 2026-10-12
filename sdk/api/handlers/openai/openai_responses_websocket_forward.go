@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -22,6 +23,8 @@ import (
 )
 
 type responsesWebsocketForwardOptions struct {
+	interrupts               <-chan []byte
+	interrupt                func([]byte) error
 	preserveCompletionOutput func() bool
 	duplexStream             func() bool
 	toolCacheTurn            *responsesWebsocketToolCacheTurn
@@ -46,6 +49,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 	toolCacheTurn := opts.toolCacheTurn
 	completed := false
 	responseStarted := false
+	activeResponseID := ""
 	completedOutput := []byte("[]")
 	completedResponseID := ""
 	outputItemsByIndex := make(map[int64][]byte)
@@ -55,6 +59,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 	if c != nil && c.Request != nil {
 		downstreamSessionKey = websocketDownstreamSessionKey(c.Request)
 	}
+	responseToolCalls := newResponsesWebsocketResponseToolCalls(downstreamSessionKey, toolCacheTurn)
 
 	var keepAliveTicker *time.Ticker
 	var keepAliveC <-chan time.Time
@@ -73,9 +78,35 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 
 	for {
 		select {
+		case payload := <-opts.interrupts:
+			// Native clients interrupt only after observing response.created.
+			// Split input queues may leave a late control behind a successor
+			// create, including one routed to a transport without interruption.
+			if activeResponseID == "" || gjson.GetBytes(payload, "response_id").String() != activeResponseID {
+				continue
+			}
+			if wsTimelineLog != nil {
+				wsTimelineLog.Append("request", payload, time.Now())
+			}
+			if opts.interrupt != nil {
+				if errInterrupt := opts.interrupt(payload); errInterrupt != nil {
+					// A control frame belongs to this connection. Never retry it on
+					// another transport or account, or manufacture an acknowledgement.
+					cancel(errInterrupt)
+					if matched, errClose := writer.closeForUpstreamError(errInterrupt); matched {
+						if errClose != nil {
+							return completedOutput, completedResponseID, sortedStringSet(pendingToolCallIDs), nil, errClose
+						}
+					} else {
+						_, _ = writer.closeWithoutError()
+					}
+					return completedOutput, completedResponseID, sortedStringSet(pendingToolCallIDs), nil, websocket.ErrCloseSent
+				}
+			}
 		case <-c.Request.Context().Done():
-			cancel(c.Request.Context().Err())
-			return completedOutput, completedResponseID, sortedStringSet(pendingToolCallIDs), nil, c.Request.Context().Err()
+			errDisconnect := context.Cause(c.Request.Context())
+			cancel(errDisconnect)
+			return completedOutput, completedResponseID, sortedStringSet(pendingToolCallIDs), nil, errDisconnect
 		case <-keepAliveC:
 			if errPing := writer.writePing(); errPing != nil {
 				cancel(errPing)
@@ -154,6 +185,7 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 			for i := range payloads {
 				if gjson.GetBytes(payloads[i], "type").String() == "response.created" {
 					responseStarted = true
+					activeResponseID = gjson.GetBytes(payloads[i], "response.id").String()
 					completed = false
 					outputItemsByIndex = make(map[int64][]byte)
 					outputItemsFallback = nil
@@ -161,14 +193,11 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 				}
 				collectResponsesWebsocketOutputItem(payloads[i], outputItemsByIndex, &outputItemsFallback)
 				eventType := gjson.GetBytes(payloads[i], "type").String()
-				if isResponsesWebsocketCompletionEvent(eventType) && (opts.preserveCompletionOutput == nil || !opts.preserveCompletionOutput()) {
+				interrupted := helps.IsCodexInterruptedResponse(payloads[i])
+				if isResponsesWebsocketCompletionEvent(eventType) && !interrupted && (opts.preserveCompletionOutput == nil || !opts.preserveCompletionOutput()) {
 					payloads[i] = restoreResponsesWebsocketCompletionOutput(payloads[i], outputItemsByIndex, outputItemsFallback)
 				}
-				if toolCacheTurn != nil {
-					toolCacheTurn.recordResponse(payloads[i])
-				} else {
-					recordResponsesWebsocketToolCallsFromPayload(downstreamSessionKey, payloads[i])
-				}
+				responseToolCalls.record(payloads[i])
 				recordPendingToolCallIDsFromPayload(pendingToolCallIDs, payloads[i])
 				var payloadErrMsg *interfaces.ErrorMessage
 				// In Codex duplex mode the executor owns connection termination:
@@ -184,9 +213,22 @@ func (h *OpenAIResponsesAPIHandler) forwardResponsesWebsocket(
 						cancel(payloadErrMsg.Error)
 						return completedOutput, completedResponseID, sortedStringSet(pendingToolCallIDs), payloadErrMsg, nil
 					}
-				} else if isResponsesWebsocketCompletionEvent(eventType) {
+				} else if isResponsesWebsocketCompletionEvent(eventType) || interrupted {
 					completed = true
-					completedOutput = responseCompletedOutputFromPayload(payloads[i], outputItemsByIndex, outputItemsFallback)
+					activeResponseID = ""
+					if interrupted {
+						responseToolCalls.discard(payloads[i])
+						// The upstream discarded partial items. Do not resurrect them
+						// in either the wire event or the local fallback transcript.
+						completedOutput = []byte("[]")
+						if output := gjson.GetBytes(payloads[i], "response.output"); output.IsArray() {
+							completedOutput = []byte(output.Raw)
+						}
+						pendingToolCallIDs = make(map[string]struct{})
+						recordPendingToolCallIDsFromPayload(pendingToolCallIDs, payloads[i])
+					} else {
+						completedOutput = responseCompletedOutputFromPayload(payloads[i], outputItemsByIndex, outputItemsFallback)
+					}
 					completedResponseID = responseCompletedIDFromPayload(payloads[i])
 				}
 				markAPIResponseTimestamp(c)

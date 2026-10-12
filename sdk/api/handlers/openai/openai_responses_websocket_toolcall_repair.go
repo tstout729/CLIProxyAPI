@@ -43,6 +43,125 @@ type responsesWebsocketToolCacheTurn struct {
 	callOrder   []string
 }
 
+type responsesWebsocketResponseToolCall struct {
+	previous json.RawMessage
+	latest   json.RawMessage
+	existed  bool
+}
+
+// responsesWebsocketResponseToolCalls tracks only calls emitted by one response.
+// Interrupted output is authoritative; previous input and other writers survive.
+type responsesWebsocketResponseToolCalls struct {
+	sessionKey string
+	turn       *responsesWebsocketToolCacheTurn
+	cache      *websocketToolOutputCache
+	emitted    map[string]responsesWebsocketResponseToolCall
+}
+
+func newResponsesWebsocketResponseToolCalls(sessionKey string, turn *responsesWebsocketToolCacheTurn) *responsesWebsocketResponseToolCalls {
+	return &responsesWebsocketResponseToolCalls{
+		sessionKey: strings.TrimSpace(sessionKey),
+		turn:       turn,
+		cache:      defaultWebsocketToolCallCache,
+		emitted:    make(map[string]responsesWebsocketResponseToolCall),
+	}
+}
+
+func (t *responsesWebsocketResponseToolCalls) record(payload []byte) {
+	if t == nil {
+		return
+	}
+	switch gjson.GetBytes(payload, "type").String() {
+	case "response.created":
+		t.emitted = make(map[string]responsesWebsocketResponseToolCall)
+	case "response.completed":
+		output := gjson.GetBytes(payload, "response.output")
+		if !output.IsArray() {
+			return
+		}
+		output.ForEach(func(_, item gjson.Result) bool {
+			t.recordItem(payload, item)
+			return true
+		})
+	case "response.output_item.added", "response.output_item.done":
+		t.recordItem(payload, gjson.GetBytes(payload, "item"))
+	}
+}
+
+func (t *responsesWebsocketResponseToolCalls) recordItem(payload []byte, item gjson.Result) {
+	if !isCompleteResponsesWebsocketToolCall(item) {
+		return
+	}
+	raw, ok := responsesWebsocketRawMessageForResult(payload, item)
+	if !ok {
+		return
+	}
+	callID := strings.Clone(strings.TrimSpace(item.Get("call_id").String()))
+	snapshot, recorded := t.emitted[callID]
+	if t.turn != nil {
+		if !recorded {
+			previous, existed := t.turn.calls[callID]
+			snapshot.previous, snapshot.existed = bytes.Clone(previous), existed
+		}
+		t.turn.recordItem(payload, item)
+	} else if t.cache != nil && t.sessionKey != "" {
+		if !recorded {
+			snapshot.previous, snapshot.existed = t.cache.recordAndSnapshot(t.sessionKey, callID, raw)
+		} else {
+			t.cache.record(t.sessionKey, callID, raw)
+		}
+	} else {
+		return
+	}
+	snapshot.latest = bytes.Clone(raw)
+	t.emitted[callID] = snapshot
+}
+
+func (t *responsesWebsocketResponseToolCalls) discard(payload []byte) {
+	if t == nil {
+		return
+	}
+	retained := make(map[string]struct{})
+	gjson.GetBytes(payload, "response.output").ForEach(func(_, item gjson.Result) bool {
+		if isCompleteResponsesWebsocketToolCall(item) {
+			retained[strings.TrimSpace(item.Get("call_id").String())] = struct{}{}
+			t.recordItem(payload, item)
+		}
+		return true
+	})
+	for callID, snapshot := range t.emitted {
+		if _, keep := retained[callID]; keep {
+			continue
+		}
+		if t.turn != nil {
+			current, exists := t.turn.calls[callID]
+			if !exists || !bytes.Equal(current, snapshot.latest) {
+				continue
+			}
+			if snapshot.existed {
+				t.turn.calls[callID] = bytes.Clone(snapshot.previous)
+			} else {
+				delete(t.turn.calls, callID)
+				t.turn.callOrder = removeWebsocketToolCallID(t.turn.callOrder, callID)
+			}
+		} else if t.cache != nil {
+			t.cache.restoreIfEqual(t.sessionKey, callID, snapshot)
+		}
+	}
+	t.emitted = make(map[string]responsesWebsocketResponseToolCall)
+}
+
+func removeWebsocketToolCallID(order []string, callID string) []string {
+	for i, id := range order {
+		if id == callID {
+			copy(order[i:], order[i+1:])
+			order[len(order)-1] = ""
+			return order[:len(order)-1]
+		}
+	}
+	return order
+}
+
 func newWebsocketToolOutputCache(ttl time.Duration, maxPerSession int) *websocketToolOutputCache {
 	if ttl < 0 {
 		ttl = websocketToolOutputCacheTTL
@@ -69,6 +188,25 @@ func (c *websocketToolOutputCache) record(sessionKey string, callID string, item
 	defer c.mu.Unlock()
 
 	c.cleanupLocked(now)
+	c.recordLocked(sessionKey, callID, item, now)
+}
+
+func (c *websocketToolOutputCache) recordAndSnapshot(sessionKey string, callID string, item json.RawMessage) (json.RawMessage, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	c.cleanupLocked(now)
+	var previous json.RawMessage
+	var existed bool
+	if session := c.sessions[sessionKey]; session != nil {
+		previous, existed = session.outputs[callID]
+		previous = bytes.Clone(previous)
+	}
+	c.recordLocked(sessionKey, callID, item, now)
+	return previous, existed
+}
+
+func (c *websocketToolOutputCache) recordLocked(sessionKey string, callID string, item json.RawMessage, now time.Time) {
 
 	session, ok := c.sessions[sessionKey]
 	if !ok || session == nil {
@@ -90,6 +228,25 @@ func (c *websocketToolOutputCache) record(sessionKey string, callID string, item
 		session.order[0] = ""
 		session.order = session.order[1:]
 		delete(session.outputs, evict)
+	}
+}
+
+func (c *websocketToolOutputCache) restoreIfEqual(sessionKey string, callID string, snapshot responsesWebsocketResponseToolCall) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cleanupLocked(time.Now())
+	session := c.sessions[sessionKey]
+	if session == nil || !bytes.Equal(session.outputs[callID], snapshot.latest) {
+		return
+	}
+	if snapshot.existed {
+		session.outputs[callID] = bytes.Clone(snapshot.previous)
+	} else {
+		delete(session.outputs, callID)
+		session.order = removeWebsocketToolCallID(session.order, callID)
+		if len(session.outputs) == 0 {
+			delete(c.sessions, sessionKey)
+		}
 	}
 }
 
