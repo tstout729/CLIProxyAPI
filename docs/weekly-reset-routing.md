@@ -43,3 +43,22 @@ The value is a percentage of the weekly limit on the providers' 0-100 scale (`15
 - For one account, add a top-level number to its auth JSON, next to `priority`: `"weekly_reserve_percent": 30`. It overrides the global value; `0` exempts that account. Invalid values (outside 0-100 or not a number) are ignored.
 
 The global value hot-reloads with the config file. Changing it rebuilds the routing selector, which clears in-memory thread bindings, as any routing change does. `GET /v8/management/routing/weekly-status` reports `weekly_reserve_percent` and, per account, `reserve_percent` and `reserved` (account-wide weekly window at or below the reserve).
+
+## When every account is out of usage
+
+A thread moves to another account as soon as its own account runs out. When no account for the model has usage left, the proxy can't switch, so it tells the client when to come back:
+
+- The request gets a 429 rate-limit error, not `503 no auth candidates`. The message names the first reset in Pacific time, for example `All credentials for model claude-opus-5-5 are out of usage until Oct 14 3:10 PM PDT`.
+- `Retry-After` gives the seconds until that reset. Claude responses also carry `Anthropic-Ratelimit-Unified-Reset`, the Unix time of the reset, which Claude Code's unattended retry mode waits for. Other cooldowns (every account cooling down after upstream errors) carry the same header.
+- An account is usable again only when every exhausted window has reset. For example, an account with both its five-hour and weekly windows at 0% counts from its weekly reset.
+- No upstream request is made while every account is exhausted. When the reset passes, the next request is routed normally. Usage polling confirms the new window within about 15 seconds.
+
+The Claude launchers turn on Claude Code's unattended retry mode, so a running turn waits for the reset and then resends the same request instead of ending:
+
+```sh
+CLAUDE_CODE_RETRY_WATCHDOG=1                    # wait out 429 and 529 errors
+CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS=21600000 # give up after 6 hours of waiting
+CLAUDE_CODE_MAX_RETRIES=15                      # other errors keep a bounded retry count
+```
+
+`scripts/claude-t3proxy.sh` (T3 Code's Claude binary path, installed as `~/.local/bin/claude-t3proxy`) and `scripts/home-coding-session.py` (shell, cmux and home sessions) set these unless the environment already does. While waiting, Claude Code reports an `api_retry` status about every 30 seconds. A Claude process started before these launchers were installed keeps its old settings until it restarts; without unattended retry mode, Claude Code stops at the first 429 whose reset is more than 60 seconds away.

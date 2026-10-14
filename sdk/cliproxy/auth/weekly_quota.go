@@ -85,6 +85,7 @@ type weeklyCapacity struct {
 	weekly    bool      // at least one current weekly bucket applies
 	remaining float64   // lowest applicable weekly RemainingPercent (0-100)
 	exhausted bool
+	recoverAt time.Time // when every exhausted bucket has reset; zero if unknown
 }
 
 // capacity reports the applicable buckets for model. Passed resets become
@@ -97,6 +98,8 @@ func (c *WeeklyQuotaCache) capacity(auth *Auth, model string, now time.Time) wee
 	}
 	var result weeklyCapacity
 	unknownAfterReset := false
+	exhausted := weeklyCapacity{}
+	recoverUnknown := false
 	for _, bucket := range o.Buckets {
 		if !weeklyBucketApplies(bucket.Scope, model) {
 			continue
@@ -106,7 +109,13 @@ func (c *WeeklyQuotaCache) capacity(auth *Auth, model string, now time.Time) wee
 			continue
 		}
 		if bucket.RemainingPercent <= 0 {
-			return weeklyCapacity{exhausted: true}
+			exhausted.exhausted = true
+			if bucket.ResetAt == nil {
+				recoverUnknown = true
+			} else if bucket.ResetAt.After(exhausted.recoverAt) {
+				exhausted.recoverAt = *bucket.ResetAt
+			}
+			continue
 		}
 		if bucket.Window != "weekly" {
 			continue
@@ -118,6 +127,12 @@ func (c *WeeklyQuotaCache) capacity(auth *Auth, model string, now time.Time) wee
 		if bucket.ResetAt != nil && (result.reset.IsZero() || bucket.ResetAt.Before(result.reset)) {
 			result.reset = *bucket.ResetAt
 		}
+	}
+	if exhausted.exhausted {
+		if recoverUnknown {
+			exhausted.recoverAt = time.Time{}
+		}
+		return exhausted
 	}
 	if unknownAfterReset {
 		return weeklyCapacity{}
@@ -271,12 +286,43 @@ func (s *WeeklyResetFirstSelector) filter(auths []*Auth, model string, now time.
 	return unreserved
 }
 
+// eligible applies filter. When observed usage excludes every account, it
+// returns a rate-limit error naming the first account's reset, so clients
+// can wait for that reset instead of failing the request.
+func (s *WeeklyResetFirstSelector) eligible(provider, model string, auths []*Auth, now time.Time) ([]*Auth, error) {
+	eligible := s.filter(auths, model, now)
+	if len(eligible) > 0 {
+		return eligible, nil
+	}
+	var earliest time.Time
+	for _, auth := range auths {
+		if auth == nil {
+			continue
+		}
+		recoverAt := s.Cache.capacity(auth, s.selectionModel(auth, model), now).recoverAt
+		if !recoverAt.IsZero() && (earliest.IsZero() || recoverAt.Before(earliest)) {
+			earliest = recoverAt
+		}
+	}
+	if earliest.IsZero() {
+		return eligible, nil
+	}
+	if provider == "mixed" {
+		provider = ""
+	}
+	return nil, newUsageExhaustedError(model, provider, earliest, now)
+}
+
 func (s *WeeklyResetFirstSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	now := time.Now()
 	if s.Cache != nil {
 		now = s.Cache.nowFunc()
 	}
-	available, err := getSelectorAvailableAuths(ctx, s.filter(auths, model, now), provider, model, now)
+	candidates, err := s.eligible(provider, model, auths, now)
+	if err != nil {
+		return nil, err
+	}
+	available, err := getSelectorAvailableAuths(ctx, candidates, provider, model, now)
 	if err != nil {
 		return nil, err
 	}

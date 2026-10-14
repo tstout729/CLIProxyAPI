@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -99,6 +100,11 @@ func TestWriteClaudeErrorResponse_IncludesRetryAfterForModelCooldownDefaultSetti
 	}
 	if got := recorder.Header().Get("Retry-After"); got != "20" {
 		t.Fatalf("Retry-After = %q, want 20", got)
+	}
+	// Claude Code's unattended retry mode waits until this Unix time.
+	reset, err := strconv.ParseInt(recorder.Header().Get(coreauth.HeaderAnthropicRatelimitUnifiedReset), 10, 64)
+	if wait := time.Until(time.Unix(reset, 0)); err != nil || wait < 18*time.Second || wait > 22*time.Second {
+		t.Fatalf("%s = %q, want about 20s from now", coreauth.HeaderAnthropicRatelimitUnifiedReset, recorder.Header().Get(coreauth.HeaderAnthropicRatelimitUnifiedReset))
 	}
 }
 

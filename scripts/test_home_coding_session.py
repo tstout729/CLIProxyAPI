@@ -199,6 +199,23 @@ class HomeCodingTests(unittest.TestCase):
             with patch.dict(os.environ, {"CPA_PROXY_KEY_FILE": str(key)}, clear=True), self.assertRaisesRegex(SystemExit, "private"):
                 home.run_agent("codex", [])
 
+    def test_claude_waits_for_usage_reset_unless_overridden(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-only-inference-key\n")
+            key.chmod(0o600)
+            environment = {"CPA_PROXY_KEY_FILE": str(key), "CLAUDE_CODE_MAX_RETRIES": "3"}
+            with patch.dict(os.environ, environment, clear=True), patch.object(home.shutil, "which", return_value="/usr/bin/claude"), patch.object(home.sys, "platform", "linux"), patch.object(home.os, "execvpe") as execute:
+                home.run_agent("claude", [])
+            env = execute.call_args.args[2]
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "test-only-inference-key")
+            self.assertEqual(env["CLAUDE_CODE_RETRY_WATCHDOG"], "1")
+            self.assertEqual(env["CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS"], "21600000")
+            self.assertEqual(env["CLAUDE_CODE_MAX_RETRIES"], "3")
+            with patch.dict(os.environ, {"CPA_PROXY_KEY_FILE": str(key)}, clear=True), patch.object(home.shutil, "which", return_value="/usr/bin/codex"), patch.object(home.sys, "platform", "linux"), patch.object(home.os, "execvpe") as execute:
+                home.run_agent("codex", [])
+            self.assertNotIn("CLAUDE_CODE_RETRY_WATCHDOG", execute.call_args.args[2])
+
     def test_existing_session_does_not_resubmit_prompt(self):
         options = type("Options", (), {"name": "task", "project": None, "detach": True})()
         responses = [subprocess.CompletedProcess([], 0, value, "") for value in ["", "/tmp/old-project\n", "0\n"]]
