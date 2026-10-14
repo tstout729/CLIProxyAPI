@@ -620,7 +620,10 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 // or scheduler additionally receives lower priority tiers.
 func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, provider, routeModel string, now time.Time) (priorityAuths, selectorAuths []*Auth, err error) {
 	if weekly := weeklySelector(selector); weekly != nil {
-		auths = weekly.filter(auths, routeModel, weekly.Cache.nowFunc())
+		auths, err = weekly.eligible(provider, routeModel, auths, weekly.Cache.nowFunc())
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	_, sessionAffinity := selector.(*SessionAffinitySelector)
 	schedulerAcross := m.pluginSchedulerWantsAcrossPrioritiesLocked()
@@ -690,7 +693,9 @@ func restoreModelCooldownErrorModel(err error, requestedModel string) error {
 	if !errors.As(err, &cooldownErr) || cooldownErr == nil || cooldownErr.model != "" {
 		return err
 	}
-	return newModelCooldownErrorWithCause(requestedModel, cooldownErr.provider, cooldownErr.resetIn, cooldownErr.cause)
+	restored := *cooldownErr
+	restored.model = requestedModel
+	return &restored
 }
 
 func latestUnauthorizedCandidateError(auths []*Auth) error {

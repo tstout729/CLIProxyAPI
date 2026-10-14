@@ -34,6 +34,13 @@ NATIVE_FEEL = [
     "set -g allow-rename on",
 ]
 PREFIX = "home-"
+# Claude Code waits out the proxy's "every account is out of usage" 429 until
+# the first reset (up to 6 hours); other errors keep a bounded retry count.
+CLAUDE_RETRY_ENVIRONMENT = {
+    "CLAUDE_CODE_RETRY_WATCHDOG": "1",
+    "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS": "21600000",
+    "CLAUDE_CODE_MAX_RETRIES": "15",
+}
 
 
 def format_sessions(output):
@@ -104,6 +111,7 @@ def run_agent(agent, arguments):
         env["ANTHROPIC_BASE_URL"] = base
         env["ANTHROPIC_AUTH_TOKEN"] = key
         env.pop("ANTHROPIC_API_KEY", None)
+        env.update({name: value for name, value in CLAUDE_RETRY_ENVIRONMENT.items() if name not in env})
     # Prevent idle sleep while the agent lives. Closing the host lid still sleeps it.
     if sys.platform == "darwin":
         subprocess.Popen(

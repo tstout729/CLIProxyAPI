@@ -85,6 +85,17 @@ type modelCooldownError struct {
 	resetIn  time.Duration
 	provider string
 	cause    error
+	// usageResetAt is set when observed usage, not a failure cooldown, blocks
+	// every credential: the first credential's usage window reset.
+	usageResetAt time.Time
+}
+
+// newUsageExhaustedError reports that every credential's observed usage is
+// exhausted until resetAt.
+func newUsageExhaustedError(model, provider string, resetAt, now time.Time) *modelCooldownError {
+	err := newModelCooldownError(model, provider, resetAt.Sub(now))
+	err.usageResetAt = resetAt
+	return err
 }
 
 // NewModelCooldownError creates an error representing model-level cooldown.
@@ -125,6 +136,9 @@ func (e *modelCooldownError) Error() string {
 		modelName = "requested model"
 	}
 	message := fmt.Sprintf("All credentials for model %s are cooling down", modelName)
+	if resetAt := weeklyPacificTime(e.usageResetAt); resetAt != nil {
+		message = fmt.Sprintf("All credentials for model %s are out of usage until %s", modelName, resetAt.Format("Jan 2 3:04 PM MST"))
+	}
 	if e.provider != "" {
 		message = fmt.Sprintf("%s via provider %s", message, e.provider)
 	}
@@ -144,6 +158,9 @@ func (e *modelCooldownError) Error() string {
 		"model":         e.model,
 		"reset_time":    displayDuration.String(),
 		"reset_seconds": resetSeconds,
+	}
+	if resetAt := weeklyPacificTime(e.usageResetAt); resetAt != nil {
+		errorBody["reset_at"] = resetAt.Format(time.RFC3339)
 	}
 	if e.provider != "" {
 		errorBody["provider"] = e.provider
@@ -358,8 +375,24 @@ func (e *modelCooldownError) Headers() http.Header {
 		resetSeconds = 0
 	}
 	headers.Set("Retry-After", strconv.Itoa(resetSeconds))
+	// Claude Code's unattended retry mode sleeps until this Unix time.
+	resetAt := e.usageResetAt
+	if resetAt.IsZero() && e.resetIn > 0 {
+		resetAt = time.Now().Add(e.resetIn)
+	}
+	if !resetAt.IsZero() {
+		seconds := resetAt.Unix()
+		if resetAt.Nanosecond() > 0 {
+			seconds++
+		}
+		headers.Set(HeaderAnthropicRatelimitUnifiedReset, strconv.FormatInt(seconds, 10))
+	}
 	return headers
 }
+
+// HeaderAnthropicRatelimitUnifiedReset carries the Unix time when a cooled-down
+// or usage-exhausted model can serve requests again.
+const HeaderAnthropicRatelimitUnifiedReset = "Anthropic-Ratelimit-Unified-Reset"
 
 func authPriority(auth *Auth) int {
 	if auth == nil || auth.Attributes == nil {
@@ -976,7 +1009,10 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		if weekly.Cache != nil {
 			now = weekly.Cache.nowFunc()
 		}
-		auths = weekly.filter(auths, model, now)
+		var errExhausted error
+		if auths, errExhausted = weekly.eligible(provider, model, auths, now); errExhausted != nil {
+			return nil, errExhausted
+		}
 	}
 	entry := selectorLogEntry(ctx)
 	if opts.Metadata == nil {
