@@ -486,21 +486,27 @@ def verify(paths, ask_models=True):
     say(f"  new zsh: claude and codex {'run locally through the pool' if defined else 'are NOT the pool functions'}")
     if not ask_models or not (switch or tunnel):
         return
-    environment = {**os.environ, "CLIPROXY_HOME_DEFAULT": "0"}
+    # The commands a terminal runs, with its PATH: print mode and `exec` stay on
+    # this Mac and take the pool launchers.
     with tempfile.TemporaryDirectory() as directory:
         checks = [
-            ("claude", [str(paths.bin / "claude-m1"), "-p", "Reply with exactly: ok"]),
-            ("codex", [str(paths.bin / "codex-m1"), "exec", "--skip-git-repo-check", "Reply with exactly: ok"]),
+            ("claude", 'claude -p "Reply with exactly: ok"'),
+            ("codex", 'codex exec --skip-git-repo-check "Reply with exactly: ok"'),
         ]
         for name, command in checks:
             try:
-                result = run(command, cwd=directory, env=environment, stdin=subprocess.DEVNULL, timeout=180)
-                answered = result.returncode == 0 and "ok" in result.stdout.lower()
+                result = run(["/bin/zsh", "-ilc", command], cwd=directory, stdin=subprocess.DEVNULL, timeout=180)
+                answered = result.returncode == 0 and answered_ok(result.stdout)
                 lines = (result.stderr or result.stdout).strip().splitlines()
                 detail = "" if answered else f" ({lines[-1] if lines else 'no output'})"
             except subprocess.TimeoutExpired:
                 answered, detail = False, " (no answer in 3 minutes)"
             say(f"  {name} on this Mac through the pool: {'answered' if answered else 'FAILED'}{detail}")
+
+
+def answered_ok(output):
+    """A line that ends with the reply "ok" (shell integration codes may precede it)."""
+    return re.search(r"(?<![a-z])ok\.?[ \t]*$", output.lower(), re.M) is not None
 
 
 def undo(paths):

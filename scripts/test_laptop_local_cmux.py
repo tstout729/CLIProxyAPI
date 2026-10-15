@@ -98,6 +98,14 @@ class CmuxTests(unittest.TestCase):
         self.assertEqual(json.dumps(config), before)
 
 
+class AnswerTests(unittest.TestCase):
+    def test_only_a_reply_of_ok_counts(self):
+        self.assertTrue(laptop.answered_ok("\x1b]1337;shell=zsh\x07ok\n"))
+        self.assertTrue(laptop.answered_ok("thinking\nOK.\n"))
+        self.assertFalse(laptop.answered_ok("tokens used\n16,827\n"))
+        self.assertFalse(laptop.answered_ok("Error: not ok to proceed\n"))
+
+
 class ShellBlockTests(unittest.TestCase):
     def test_add_is_idempotent_and_remove_restores_the_file(self):
         original = "export PATH=\"$HOME/.local/bin:$PATH\"\n"
