@@ -124,7 +124,25 @@ References: [tmux persistence](https://github.com/tmux/tmux/wiki/Getting-Started
 
 `macos/CLIProxyDashboard/build.sh` builds `CLI Proxy.app` into `/Applications`. It opens the management dashboard in its own window. View > This Mac (⌘1) shows the local fallback proxy; View > M1 (⌘2) shows the main gateway through the tunnel. View > Copy Management Key (⌘K) copies the key for the dashboard shown, for its sign-in screen. Use the dashboard's OAuth page to sign accounts into a proxy; provider pages open in Safari. The Quota page shows each account's usage.
 
-## Remote-first with cmux (current setup, 2026-10-09)
+## cmux is a local terminal again (current setup, 2026-10-15)
+
+T3 Code is now the main place for project work, and it runs on the home host. cmux on the laptop goes back to local terminals, so agents can work on the laptop itself, for example with computer use. Ghostty does not change: its windows still open the home host's tabs.
+
+- **cmux:** New Workspace (Cmd+N) opens a blank local terminal (`ui.newWorkspace.action` is `cmux.newWorkspace`). The `m1-workspace` action stays in the plus-button menu and the Command Palette. Claude sessions that cmux starts or restores run on the laptop through the pool (`automation.claudeBinaryPath` is `~/.local/bin/claude-proxy`). `terminal.autoResumeAgentSessions` stays false, so cmux does not try to resume old home host sessions on the laptop.
+- **Laptop shells:** `~/.zshrc` sets `CLIPROXY_HOME_DEFAULT=0` and sources `daily-proxy-shell.sh`. Plain `claude` and `codex` run on the laptop through the shared account pool on the M1. `claude 1` and `codex 1` still open persistent sessions on the M1. `claude-m5` and `codex-m5` use the laptop's direct sign-ins. Typing `m1` opens the home host's tab list.
+- **Pool route:** the tunnel, proxy switch and fallback proxy LaunchAgents retired on 2026-10-09 are running again. Requests go to the M1 gateway and fall back to the laptop's own proxy.
+- **Computer use:** Claude Code's built-in `computer-use` server needs a claude.ai sign-in, so it does not appear in pool sessions; use `claude-m5` for it. cmux's own computer-use tools (`computerUse.enabled`, on by default) attach to agents launched in cmux terminals whatever their sign-in.
+
+To switch, open Terminal.app on the laptop (cmux and Ghostty still open the home host until then) and run:
+
+```sh
+ssh home cat projects/CLIProxyAPI/scripts/laptop-local-cmux.py > /tmp/laptop-local-cmux.py
+/opt/homebrew/bin/python3 -I /tmp/laptop-local-cmux.py apply
+```
+
+It backs up every file it changes to `~/.config/cliproxyapi-custom/backup-<time>-local-cmux-*/`. It records what it did in `~/.config/cliproxyapi-custom/laptop-local-cmux.json`. It finishes with checks: the switch and tunnel answer, a new zsh has the pool functions, and Claude and Codex each answer one short prompt through the pool. `status` reports the current mode without changing anything, `verify` repeats the checks, and `undo` restores the backups and stops the LaunchAgents it started. The script refuses to run on the home host or over SSH. Tests: `/opt/homebrew/bin/python3 -m unittest scripts/test_laptop_local_cmux.py`.
+
+## Remote-first with cmux (replaced for cmux on 2026-10-15; Ghostty below is still current)
 
 This supersedes the laptop-side routing above. The laptop is only the screen; every agent runs on the home host next to CLIProxyAPI (always-on host, Tailscale, mosh, tmux).
 
