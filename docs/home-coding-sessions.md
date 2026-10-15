@@ -140,7 +140,7 @@ ssh home cat projects/CLIProxyAPI/scripts/laptop-local-cmux.py > /tmp/laptop-loc
 /opt/homebrew/bin/python3 -I /tmp/laptop-local-cmux.py apply
 ```
 
-It backs up every file it changes to `~/.config/cliproxyapi-custom/backup-<time>-local-cmux-*/`. It records what it did in `~/.config/cliproxyapi-custom/laptop-local-cmux.json`. It finishes with checks: the switch and tunnel answer, a new zsh has the pool functions, and Claude and Codex each answer one short prompt through the pool. `status` reports the current mode without changing anything, `verify` repeats the checks, and `undo` restores the backups and stops the LaunchAgents it started. The script refuses to run on the home host or over SSH. Tests: `/opt/homebrew/bin/python3 -m unittest scripts/test_laptop_local_cmux.py`.
+It backs up every file it changes to `~/.config/cliproxyapi-custom/backup-<time>-local-cmux-*/`. It records what it did in `~/.config/cliproxyapi-custom/laptop-local-cmux.json`. It finishes with checks: the switch and tunnel answer, a new zsh has the pool functions, and Claude and Codex each answer one short prompt through the pool. `status` reports the current mode without changing anything, `verify` repeats the checks, and `undo` restores the backups and stops the LaunchAgents it started. The script refuses to run on the home host. It also works over SSH from the home host (`ssh <laptop> python3 /tmp/laptop-local-cmux.py apply`), since every check runs on the laptop. Tests: `/opt/homebrew/bin/python3 -m unittest scripts/test_laptop_local_cmux.py`.
 
 ## Remote-first with cmux (replaced for cmux on 2026-10-15; Ghostty below is still current)
 

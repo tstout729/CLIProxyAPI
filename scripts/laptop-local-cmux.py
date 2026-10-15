@@ -191,9 +191,11 @@ def localize_cmux(config, claude_binary):
             if value is None or (isinstance(value, str) and value.lower() in UNBOUND):
                 changes.append(f"Restored cmux's default shortcut for {builtin}")
                 del bindings[builtin]
-    automation = config.get("automation")
-    path = automation.get("claudeBinaryPath") if isinstance(automation, dict) else None
-    if isinstance(path, str) and "claude-cmux-home" in path:
+    automation = config.get("automation", {})
+    path = automation.get("claudeBinaryPath", "") if isinstance(automation, dict) else None
+    # Unset means the claude in PATH, which skips the pool for sessions cmux starts.
+    if isinstance(path, str) and (not path or "claude-cmux-home" in path) and path != claude_binary:
+        config["automation"] = automation
         automation["claudeBinaryPath"] = claude_binary
         if claude_binary:
             changes.append(f"cmux starts and restores Claude locally through the pool ({claude_binary})")
@@ -312,8 +314,6 @@ def reload_cmux():
 def check_guards(paths):
     if sys.platform != "darwin":
         raise SystemExit("Run this on the laptop (macOS).")
-    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
-        raise SystemExit("This is an SSH session. Run it in a local terminal on the laptop, such as Terminal.app.")
     if (paths.config / "home-agent-shell.sh").is_file():
         raise SystemExit("This Mac is the home host. Run it on the laptop, in a local terminal such as Terminal.app.")
     hostname = run(["ssh", "-G", HOST]).stdout
