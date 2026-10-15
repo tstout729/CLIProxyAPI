@@ -58,6 +58,16 @@ class CmuxTests(unittest.TestCase):
         self.assertEqual(laptop.home_host_references(config), [])
         self.assertEqual(laptop.localize_cmux(config, "/Users/me/.local/bin/claude-proxy"), [])
 
+    def test_laptop_shape_without_a_claude_binary_gets_the_pool_launcher(self):
+        config = {"actions": {"m1-workspace": {"type": "workspace", "workspace": {"layout": {"pane": {"surfaces": [
+                      {"type": "terminal", "command": "cmux mosh-tmux home --name M1; exit"}]}}}}},
+                  "ui": {"newWorkspace": {"action": "m1-workspace"}},
+                  "terminal": {"autoResumeAgentSessions": False}}
+        laptop.localize_cmux(config, "/Users/me/.local/bin/claude-proxy")
+        self.assertEqual(config["ui"]["newWorkspace"]["action"], "cmux.newWorkspace")
+        self.assertEqual(config["automation"], {"claudeBinaryPath": "/Users/me/.local/bin/claude-proxy"})
+        self.assertEqual(config["terminal"], {"autoResumeAgentSessions": False})
+
     def test_home_host_action_on_cmd_n_gives_the_key_back(self):
         config = {
             "actions": {
