@@ -24,7 +24,7 @@ func weeklyTestBucket(window string, reset time.Time, remaining float64) WeeklyQ
 // When every account's usage is exhausted, the request fails with a rate limit
 // naming the first account's reset instead of "no auth candidates", without
 // calling upstream. Once that reset passes, the same request succeeds.
-func TestWeeklyAllExhaustedReportsFirstUsageReset(t *testing.T) {
+func TestWeeklyAllExhaustedReportsEarliestAccountRecovery(t *testing.T) {
 	now := time.Now()
 	affinity := NewSessionAffinitySelector(&WeeklyResetFirstSelector{})
 	defer affinity.Stop()
@@ -62,8 +62,6 @@ func TestWeeklyAllExhaustedReportsFirstUsageReset(t *testing.T) {
 			weeklyTestBucket("five-hour", firstReset, 0), weeklyTestBucket("weekly", start.Add(5*24*time.Hour), 22))
 		weeklyTestObserveBuckets(manager.weeklyQuota, weeklyOut, now,
 			weeklyTestBucket("five-hour", start.Add(3*time.Hour), 64), weeklyTestBucket("weekly", start.Add(3*24*time.Hour), 0))
-		// An account recovers only when every spent window has reset: its earlier
-		// five-hour reset must not be reported or make it eligible.
 		weeklyTestObserveBuckets(manager.weeklyQuota, bothOut, now,
 			weeklyTestBucket("five-hour", start.Add(10*time.Minute), 0), weeklyTestBucket("weekly", start.Add(4*24*time.Hour), 0))
 	}
@@ -92,7 +90,7 @@ func TestWeeklyAllExhaustedReportsFirstUsageReset(t *testing.T) {
 	if got := headers.Get(HeaderAnthropicRatelimitUnifiedReset); got != strconv.FormatInt(wantReset, 10) {
 		t.Fatalf("%s = %q, want %d", HeaderAnthropicRatelimitUnifiedReset, got, wantReset)
 	}
-	if !strings.Contains(errStream.Error(), "out of usage until") {
+	if !strings.Contains(errStream.Error(), "have exhausted observed usage") {
 		t.Fatalf("message = %s", errStream.Error())
 	}
 	if len(attempts) != 0 {
@@ -102,7 +100,7 @@ func TestWeeklyAllExhaustedReportsFirstUsageReset(t *testing.T) {
 	// The selector without affinity reports the same reset.
 	weekly := &WeeklyResetFirstSelector{Cache: manager.weeklyQuota}
 	_, errPick := weekly.Pick(context.Background(), "claude", model, cliproxyexecutor.Options{}, []*Auth{weeklyOut, bothOut, fiveHourOut})
-	if !errors.As(errPick, &cooldown) || !cooldown.usageResetAt.Equal(firstReset) {
+	if !errors.As(errPick, &cooldown) || !cooldown.usageRecoveryAt.Equal(firstReset) {
 		t.Fatalf("weekly Pick error = %v, want reset at %s", errPick, firstReset)
 	}
 

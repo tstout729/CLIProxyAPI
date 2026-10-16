@@ -30,8 +30,8 @@ func TestWeeklyReserveZeroKeepsResetOrdering(t *testing.T) {
 	for _, reserve := range []float64{0, -5, math.NaN(), math.Inf(-1)} {
 		selector := &WeeklyResetFirstSelector{Cache: cache, ReservePercent: reserve}
 		weeklyReservePick(t, selector, "claude-sonnet-4.5", cliproxyexecutor.Options{}, []*Auth{later, early}, early.ID)
-		if got := selector.filter([]*Auth{later, early}, "claude-sonnet-4.5", now); len(got) != 2 {
-			t.Fatalf("reserve %v filtered %d accounts", reserve, 2-len(got))
+		if got := selector.filter([]*Auth{later, early}, "claude-sonnet-4.5", now); len(got.auths) != 2 {
+			t.Fatalf("reserve %v filtered %d accounts", reserve, 2-len(got.auths))
 		}
 	}
 }

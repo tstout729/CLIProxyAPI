@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -123,5 +124,26 @@ func TestPendingClaudeStreamErrorUsesBufferedError(t *testing.T) {
 	}
 	if gotErr != wantErr {
 		t.Fatalf("pending error = %p, want %p", gotErr, wantErr)
+	}
+}
+
+func TestWriteClaudeErrorResponseRetainsUsageLimitBreakdown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	message := "All 4 accounts considered for this request have exhausted observed usage for model claude-sonnet-4.5. Limits reached: weekly 3 of 4; five-hour 1 of 4 (counts may overlap). Account 1: account-wide weekly limit, reset Oct 16, 2026 2:00 AM PDT. Account 2: account-wide weekly limit, reset Oct 16, 2026 3:00 AM PDT. Account 3: account-wide weekly limit, reset Oct 16, 2026 4:00 AM PDT. Account 4: account-wide five-hour limit, reset Oct 16, 2026 5:00 AM PDT. Earliest known reset: Oct 16, 2026 2:00 AM PDT."
+	payload, err := json.Marshal(map[string]any{"error": map[string]any{"code": "model_cooldown", "message": message, "reset_seconds": 7200, "reset_at": "2026-10-16T02:00:00-07:00"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	(&ClaudeCodeAPIHandler{}).WriteErrorResponse(c, &interfaces.ErrorMessage{StatusCode: http.StatusTooManyRequests, Error: errors.New(string(payload))})
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", recorder.Code)
+	}
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.message").String(); got != message {
+		t.Fatalf("Claude message lost usage breakdown: %s", got)
+	}
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.type").String(); got != "rate_limit_error" {
+		t.Fatalf("error.type = %q", got)
 	}
 }
