@@ -32,7 +32,12 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
-	defer reporter.TrackFailure(ctx, &err)
+	httpFallback := false
+	defer func() {
+		if !httpFallback {
+			reporter.TrackFailure(ctx, &err)
+		}
+	}()
 
 	prepared, err := e.prepareCodexWebsocketStream(ctx, auth, req, opts)
 	if err != nil {
@@ -56,6 +61,16 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	authLabel = auth.Label
 	authType, authValue = auth.AccountInfo()
 
+	wsReqBody := buildCodexWebsocketRequestBody(clientBody)
+	if len(wsReqBody) > codexResponsesWebsocketMaxMessageBytes &&
+		opts.ExecutionLifecycle == nil && !cliproxyexecutor.DownstreamWebsocket(ctx) &&
+		!cliproxyexecutor.RequiredUpstreamWebsocket(ctx) && gjson.GetBytes(wsReqBody, "previous_response_id").String() == "" &&
+		gjson.GetBytes(wsReqBody, "generate").Type != gjson.False {
+		log.Infof("codex websockets: request exceeds message limit; using HTTP upstream bytes=%d limit=%d", len(wsReqBody), codexResponsesWebsocketMaxMessageBytes)
+		httpFallback = true
+		return e.CodexExecutor.ExecuteStream(ctx, auth, req, opts)
+	}
+
 	executionSessionID := executionSessionIDFromOptions(opts)
 	var sess *codexWebsocketSession
 	isEphemeralSession := false
@@ -76,7 +91,6 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}
 
-	wsReqBody := buildCodexWebsocketRequestBody(clientBody)
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
 		Method:    "WEBSOCKET",
@@ -117,6 +131,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		if respHS != nil && respHS.StatusCode == http.StatusUpgradeRequired {
 			unlockStreamSession()
 			if opts.ExecutionLifecycle == nil && !cliproxyexecutor.DownstreamWebsocket(ctx) {
+				httpFallback = true
 				return e.CodexExecutor.ExecuteStream(ctx, auth, req, opts)
 			}
 			if cliproxyexecutor.UpstreamAttempted(dialCtx) {
