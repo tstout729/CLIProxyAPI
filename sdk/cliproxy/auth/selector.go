@@ -81,20 +81,19 @@ const (
 )
 
 type modelCooldownError struct {
-	model    string
-	resetIn  time.Duration
-	provider string
-	cause    error
-	// usageResetAt is set when observed usage, not a failure cooldown, blocks
-	// every credential: the first credential's usage window reset.
-	usageResetAt time.Time
+	model           string
+	resetIn         time.Duration
+	provider        string
+	cause           error
+	usageRecoveryAt time.Time
+	usageDetails    string
 }
 
 // newUsageExhaustedError reports that every credential's observed usage is
 // exhausted until resetAt.
 func newUsageExhaustedError(model, provider string, resetAt, now time.Time) *modelCooldownError {
 	err := newModelCooldownError(model, provider, resetAt.Sub(now))
-	err.usageResetAt = resetAt
+	err.usageRecoveryAt = resetAt
 	return err
 }
 
@@ -136,11 +135,14 @@ func (e *modelCooldownError) Error() string {
 		modelName = "requested model"
 	}
 	message := fmt.Sprintf("All credentials for model %s are cooling down", modelName)
-	if resetAt := weeklyPacificTime(e.usageResetAt); resetAt != nil {
-		message = fmt.Sprintf("All credentials for model %s are out of usage until %s", modelName, resetAt.Format("Jan 2 3:04 PM MST"))
+	if resetAt := weeklyPacificTime(e.usageRecoveryAt); resetAt != nil {
+		message = fmt.Sprintf("All credentials for model %s are out of usage until %s", modelName, resetAt.Format("Jan 2, 2006 3:04 PM MST"))
 	}
 	if e.provider != "" {
 		message = fmt.Sprintf("%s via provider %s", message, e.provider)
+	}
+	if e.usageDetails != "" {
+		message = e.usageDetails
 	}
 	resetSeconds := int(math.Ceil(e.resetIn.Seconds()))
 	if resetSeconds < 0 {
@@ -152,6 +154,9 @@ func (e *modelCooldownError) Error() string {
 	} else {
 		displayDuration = displayDuration.Round(time.Second)
 	}
+	if e.usageDetails != "" && e.usageRecoveryAt.IsZero() {
+		message += fmt.Sprintf(" Next retry in %s.", displayDuration)
+	}
 	errorBody := map[string]any{
 		"code":          "model_cooldown",
 		"message":       message,
@@ -159,7 +164,7 @@ func (e *modelCooldownError) Error() string {
 		"reset_time":    displayDuration.String(),
 		"reset_seconds": resetSeconds,
 	}
-	if resetAt := weeklyPacificTime(e.usageResetAt); resetAt != nil {
+	if resetAt := weeklyPacificTime(e.usageRecoveryAt); resetAt != nil {
 		errorBody["reset_at"] = resetAt.Format(time.RFC3339)
 	}
 	if e.provider != "" {
@@ -376,7 +381,7 @@ func (e *modelCooldownError) Headers() http.Header {
 	}
 	headers.Set("Retry-After", strconv.Itoa(resetSeconds))
 	// Claude Code's unattended retry mode sleeps until this Unix time.
-	resetAt := e.usageResetAt
+	resetAt := e.usageRecoveryAt
 	if resetAt.IsZero() && e.resetIn > 0 {
 		resetAt = time.Now().Add(e.resetIn)
 	}
@@ -1003,16 +1008,19 @@ func (s *SessionAffinitySelector) Trees() *cliproxysession.InMemorySessionTreeSt
 // The cache key includes provider, session ID, and model. Weekly-reset-first
 // uses a shared model namespace to preserve the account across model switches;
 // Manager still verifies model support and model-scoped capacity before reuse.
-func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (selected *Auth, selectionErr error) {
+	var usage usageExhaustion
+	defer func() { selectionErr = usage.decorate(selectionErr) }()
 	if weekly := weeklySelector(s.fallback); weekly != nil {
 		now := time.Now()
 		if weekly.Cache != nil {
 			now = weekly.Cache.nowFunc()
 		}
-		var errExhausted error
-		if auths, errExhausted = weekly.eligible(provider, model, auths, now); errExhausted != nil {
+		selection, errExhausted := weekly.eligible(provider, model, auths, now)
+		if errExhausted != nil {
 			return nil, errExhausted
 		}
+		auths, usage = selection.auths, selection.usage
 	}
 	entry := selectorLogEntry(ctx)
 	if opts.Metadata == nil {

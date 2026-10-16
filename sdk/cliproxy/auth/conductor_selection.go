@@ -619,11 +619,13 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 // unless session affinity or an across-priorities scheduler is active, in which case the selector
 // or scheduler additionally receives lower priority tiers.
 func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, provider, routeModel string, now time.Time) (priorityAuths, selectorAuths []*Auth, err error) {
+	var usage usageExhaustion
 	if weekly := weeklySelector(selector); weekly != nil {
-		auths, err = weekly.eligible(provider, routeModel, auths, weekly.Cache.nowFunc())
-		if err != nil {
-			return nil, nil, err
+		selection, errUsage := weekly.eligible(provider, routeModel, auths, weekly.Cache.nowFunc())
+		if errUsage != nil {
+			return nil, nil, errUsage
 		}
+		auths, usage = selection.auths, selection.usage
 	}
 	_, sessionAffinity := selector.(*SessionAffinitySelector)
 	schedulerAcross := m.pluginSchedulerWantsAcrossPrioritiesLocked()
@@ -631,7 +633,7 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 	if !sessionAffinity && !schedulerAcross {
 		priorityAuths, err = m.availableAuthsForRouteModel(auths, provider, routeModel, now)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, usage.decorate(err)
 		}
 		priorityAuths = cloneAuthSlice(priorityAuths)
 		return priorityAuths, priorityAuths, nil
@@ -641,7 +643,7 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 	// subset of the across-priority candidates, so it is narrowed from the same cloned auths.
 	allAuths, errAcross := m.availableAuthsForRouteModelAcrossPriorities(auths, provider, routeModel, now)
 	if errAcross != nil {
-		return nil, nil, errAcross
+		return nil, nil, usage.decorate(errAcross)
 	}
 	allAuths = cloneAuthSlice(allAuths)
 
