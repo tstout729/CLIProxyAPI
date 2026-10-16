@@ -14,6 +14,7 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -33,7 +34,12 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 
 	reporter := helps.NewExecutorUsageReporter(ctx, e, baseModel, auth)
-	defer reporter.TrackFailure(ctx, &err)
+	httpFallback := false
+	defer func() {
+		if !httpFallback {
+			reporter.TrackFailure(ctx, &err)
+		}
+	}()
 
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
@@ -95,6 +101,16 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		authType, authValue = auth.AccountInfo()
 	}
 
+	wsReqBody := buildCodexWebsocketRequestBody(body)
+	if len(wsReqBody) > codexResponsesWebsocketMaxMessageBytes &&
+		opts.ExecutionLifecycle == nil && !cliproxyexecutor.DownstreamWebsocket(ctx) &&
+		!cliproxyexecutor.RequiredUpstreamWebsocket(ctx) && gjson.GetBytes(wsReqBody, "previous_response_id").String() == "" &&
+		gjson.GetBytes(wsReqBody, "generate").Type != gjson.False {
+		log.Infof("codex websockets: request exceeds message limit; using HTTP upstream bytes=%d limit=%d", len(wsReqBody), codexResponsesWebsocketMaxMessageBytes)
+		httpFallback = true
+		return e.CodexExecutor.Execute(ctx, auth, req, opts)
+	}
+
 	executionSessionID := executionSessionIDFromOptions(opts)
 	var sess *codexWebsocketSession
 	isEphemeralSession := false
@@ -115,7 +131,6 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		sess = newEphemeralCodexWebsocketSession()
 	}
 
-	wsReqBody := buildCodexWebsocketRequestBody(body)
 	wsReqLog := helps.UpstreamRequestLog{
 		URL:       wsURL,
 		Method:    "WEBSOCKET",
@@ -150,6 +165,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 		}
 		if respHS != nil && respHS.StatusCode == http.StatusUpgradeRequired {
 			if opts.ExecutionLifecycle == nil && !cliproxyexecutor.DownstreamWebsocket(ctx) {
+				httpFallback = true
 				return e.CodexExecutor.Execute(ctx, auth, req, opts)
 			}
 			if cliproxyexecutor.UpstreamAttempted(dialCtx) {
