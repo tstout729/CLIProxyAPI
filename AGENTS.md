@@ -4,6 +4,8 @@ Go 1.26+ proxy server providing OpenAI/Gemini/Claude/Codex compatible APIs with 
 
 ## Repository
 - GitHub: https://github.com/router-for-me/CLIProxyAPI
+- Fork: https://github.com/tstout729/CLIProxyAPI is Trevor's fork of the repository above. Open PRs on the fork.
+- Install: `scripts/install-custom-macos.sh` builds this checkout and the management console from `../Cli-Proxy-API-Management-Center` (or `CONSOLE_SOURCE_DIR`). It then restarts the launchd service `io.tstout.cliproxyapi-custom` on port 8318.
 
 ## Commands
 ```bash
