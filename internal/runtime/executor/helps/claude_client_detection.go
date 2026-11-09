@@ -37,6 +37,7 @@ var claudeCodeSubclientByEntrypoint = map[string]string{
 	"mcp":                       "claude-code-mcp",
 	"bench":                     "claude-code-bench",
 	"sdk-cli":                   "claude-code-cli-sdk",
+	"t3-code":                   "claude-code-t3",
 	"sdk-ts":                    "claude-code-sdk-ts",
 	"sdk-py":                    "claude-code-sdk-py",
 	"claude-vscode":             "claude-code-vscode",
@@ -67,6 +68,12 @@ var nativeClaudeEntrypoints = map[string]bool{
 	"cli":           true,
 	"sdk-cli":       true,
 	"claude-vscode": true,
+	// T3 Code launches the real Claude Code CLI (agent SDK transport) with
+	// CLAUDE_CODE_ENTRYPOINT=t3-code. Its requests carry every strong signal, so
+	// they pass through as themselves, with the client's own version, instead of
+	// being re-labelled as the pinned CLI baseline (which also hid newer clients
+	// from models that require a newer Claude Code).
+	"t3-code": true,
 }
 
 type claudeCodeHelperShape uint8
